@@ -184,20 +184,29 @@ class University:
             
             # Use a simple search to find the main site
             if not _HAVE_DDG:
+                logger.debug("DDG not available, skipping domain detection")
                 return None
-                
+            
+            # Add delay to avoid rate limiting
+            time.sleep(0.5)
+            
             from ddgs import DDGS
-            with DDGS() as ddgs:
-                for r in ddgs.text(query, region="uk-en", max_results=3):
-                    href = r.get("href", "")
-                    if href:
-                        parsed = urlparse(href)
-                        domain = parsed.netloc.lower()
-                        # Verify it looks like a university domain
-                        if domain.endswith(".ac.uk"):
-                            self.domain = domain
-                            logger.info(f"{Fore.GREEN}Detected domain for {self.name}: {domain}{Style.RESET_ALL}")
-                            return domain
+            try:
+                with DDGS() as ddgs:
+                    for r in ddgs.text(query, region="uk-en", max_results=3):
+                        href = r.get("href", "")
+                        if href:
+                            parsed = urlparse(href)
+                            domain = parsed.netloc.lower()
+                            # Verify it looks like a university domain
+                            if domain.endswith(".ac.uk"):
+                                self.domain = domain
+                                logger.info(f"{Fore.GREEN}Detected domain for {self.name}: {domain}{Style.RESET_ALL}")
+                                return domain
+            except Exception as search_error:
+                logger.warning(f"Search timeout during domain detection for {self.name}: {search_error}")
+                # Fall back to None, will use name-based searches
+                return None
         except Exception as e:
             logger.warning(f"Could not detect domain for {self.name}: {e}")
         
@@ -442,23 +451,44 @@ def _ddg_search(query: str, max_results: int = 5) -> List[str]:
         return []
     
     results: List[str] = []
-    try:
-        logger.debug(f"{Fore.YELLOW}→ Searching with ddgs: '{query}' (max_results={max_results}){Style.RESET_ALL}")
-        with DDGS() as ddgs:
-            for idx, r in enumerate(ddgs.text(query, region="uk-en", max_results=max_results), 1):
-                if not isinstance(r, dict):
-                    logger.warning(f"Unexpected result type: {type(r)}")
+    max_retries = 3
+    retry_delay = 2.0
+    
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                wait_time = retry_delay * (2 ** (attempt - 1))  # Exponential backoff
+                logger.debug(f"{Fore.YELLOW}Retry {attempt}/{max_retries} after {wait_time}s delay...{Style.RESET_ALL}")
+                time.sleep(wait_time)
+            
+            logger.debug(f"{Fore.YELLOW}→ Searching with ddgs: '{query}' (max_results={max_results}){Style.RESET_ALL}")
+            with DDGS() as ddgs:
+                for idx, r in enumerate(ddgs.text(query, region="uk-en", max_results=max_results), 1):
+                    if not isinstance(r, dict):
+                        logger.warning(f"Unexpected result type: {type(r)}")
+                        continue
+                    href = r.get("href")
+                    title = r.get("title", "N/A")
+                    if href and isinstance(href, str):
+                        results.append(href)
+                        logger.debug(f"{Fore.GREEN}  [{idx}] {title}{Style.RESET_ALL}")
+                        logger.debug(f"      {Fore.CYAN}{href}{Style.RESET_ALL}")
+            
+            logger.info(f"{Fore.GREEN}DDG search returned {len(results)} results{Style.RESET_ALL}")
+            return results  # Success, exit retry loop
+            
+        except Exception as e:
+            error_msg = str(e)
+            if "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
+                if attempt < max_retries - 1:
+                    logger.warning(f"{Fore.YELLOW}Timeout on attempt {attempt + 1}/{max_retries}, retrying...{Style.RESET_ALL}")
                     continue
-                href = r.get("href")
-                title = r.get("title", "N/A")
-                if href and isinstance(href, str):
-                    results.append(href)
-                    logger.debug(f"{Fore.GREEN}  [{idx}] {title}{Style.RESET_ALL}")
-                    logger.debug(f"      {Fore.CYAN}{href}{Style.RESET_ALL}")
-        logger.info(f"{Fore.GREEN}DDG search returned {len(results)} results{Style.RESET_ALL}")
-    except Exception as e:
-        logger.error(f"Error in _ddg_search for query '{query}': {e}", exc_info=True)
-        return []
+                else:
+                    logger.error(f"{Fore.RED}All retry attempts failed for query '{query}'{Style.RESET_ALL}")
+            else:
+                logger.error(f"Error in _ddg_search for query '{query}': {e}", exc_info=True)
+            return []  # Return empty on final failure
+    
     return results
 
 
@@ -735,8 +765,8 @@ def find_financial_statements(university: University, max_links: int = 20) -> Li
                             logger.info(f"{Fore.GREEN}Reached maximum links for {university.name}{Style.RESET_ALL}")
                             return found
                 
-                # Delay between searches to be respectful
-                time.sleep(1.0)
+                # Longer delay between searches to avoid rate limiting
+                time.sleep(2.0)
                 
             except Exception as e:
                 logger.error(f"Error processing search term '{term}': {e}", exc_info=True)
@@ -796,6 +826,9 @@ def main(verbose: bool = False) -> None:
         if not _HAVE_TQDM:
             logger.warning(f"{Fore.YELLOW}tqdm package not installed. Progress bars will not be displayed.{Style.RESET_ALL}")
         
+        logger.info(f"{Fore.CYAN}Note: Script includes delays and retries to respect search engine rate limits.{Style.RESET_ALL}")
+        logger.info(f"{Fore.CYAN}Processing 180+ universities may take 30-60 minutes.{Style.RESET_ALL}")
+        
         # Get universities
         universities = get_universities()
         
@@ -836,8 +869,11 @@ def main(verbose: bool = False) -> None:
                 break
             except Exception as e:
                 logger.error(f"Error processing {uni.name}: {e}", exc_info=True)
-                print(f"  {Fore.RED}✗ Error occurred during search{Style.RESET_ALL}")
+                print(f"  {Fore.RED}\u2717 Error occurred during search{Style.RESET_ALL}")
                 continue
+            
+            # Small delay between universities to avoid rate limiting
+            time.sleep(0.5)
         
         # Print summary
         print(f"\n{Fore.CYAN}{Style.BRIGHT}{'='*80}{Style.RESET_ALL}")
