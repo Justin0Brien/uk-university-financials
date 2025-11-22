@@ -3,3 +3,4 @@ requests>=2.25.1
 ddgs>=3.8.0
 colorama>=0.4.4
 tqdm>=4.62.0
+playwright>=1.40.0

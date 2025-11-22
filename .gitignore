@@ -14,6 +14,11 @@ __pycache__/
 # Log files
 *.log
 university_financials_*.log
+download_financials_*.log
+logs/
+
+# Downloads
+downloads_*/
 
 # Distribution / packaging
 .Python
