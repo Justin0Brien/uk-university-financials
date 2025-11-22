@@ -57,8 +57,8 @@ from pathlib import Path
 from datetime import datetime
 
 try:
-    # Preferred approach using the official duckduckgo_search package
-    from duckduckgo_search import DDGS  # type: ignore
+    # Preferred approach using the official ddgs package (formerly duckduckgo_search)
+    from ddgs import DDGS  # type: ignore
     _HAVE_DDG = True
 except ImportError:
     _HAVE_DDG = False
@@ -364,16 +364,16 @@ def get_universities() -> List[University]:
 
 
 def _ddg_search(query: str, max_results: int = 5) -> List[str]:
-    """Search using the duckduckgo_search library if available.
+    """Search using the ddgs library if available.
 
-    When the ``duckduckgo_search`` package is installed, this helper
+    When the ``ddgs`` package is installed, this helper
     uses the official interface to perform a text search.  It returns
     a list of result URLs (strings) in the order returned by the
     search engine.  If the package is not available, the function
     falls back to ``None`` so that the caller can decide what to do.
     """
     if not _HAVE_DDG:
-        logger.debug("duckduckgo_search package not available")
+        logger.debug("ddgs package not available")
         return []
     
     if not query or not isinstance(query, str):
@@ -382,7 +382,7 @@ def _ddg_search(query: str, max_results: int = 5) -> List[str]:
     
     results: List[str] = []
     try:
-        logger.debug(f"Searching with duckduckgo_search: '{query}' (max_results={max_results})")
+        logger.debug(f"Searching with ddgs: '{query}' (max_results={max_results})")
         with DDGS() as ddgs:
             for r in ddgs.text(query, region="uk-en", max_results=max_results):
                 if not isinstance(r, dict):
@@ -462,7 +462,7 @@ def _scrape_duckduckgo_html(query: str, max_results: int = 5) -> List[str]:
 def search_links(query: str, max_results: int = 5) -> List[str]:
     """Search for a query and return a list of candidate URLs.
 
-    This helper first tries the ``duckduckgo_search`` library; if that
+    This helper first tries the ``ddgs`` library; if that
     yields no results (or if the library is not installed), it falls
     back to scraping DuckDuckGo's HTML interface.  The returned list
     contains at most ``max_results`` unique URLs.
@@ -476,7 +476,7 @@ def search_links(query: str, max_results: int = 5) -> List[str]:
     # Try official DDG library first
     results = _ddg_search(query, max_results=max_results)
     if results:
-        logger.info(f"{Fore.GREEN}Found {len(results)} results using duckduckgo_search{Style.RESET_ALL}")
+        logger.info(f"{Fore.GREEN}Found {len(results)} results using ddgs{Style.RESET_ALL}")
         return results
     
     # Fallback to HTML scraping
@@ -631,7 +631,7 @@ def main() -> None:
         
         # Check dependencies
         if not _HAVE_DDG:
-            logger.warning(f"{Fore.YELLOW}duckduckgo_search package not installed. Using HTML scraping fallback.{Style.RESET_ALL}")
+            logger.warning(f"{Fore.YELLOW}ddgs package not installed. Using HTML scraping fallback.{Style.RESET_ALL}")
         if not _HAVE_COLORAMA:
             logger.warning(f"{Fore.YELLOW}colorama package not installed. Terminal output will not be colored.{Style.RESET_ALL}")
         if not _HAVE_TQDM:

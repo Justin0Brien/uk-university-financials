@@ -47,7 +47,7 @@ pip install -r requirements.txt
 
 - `beautifulsoup4` - HTML parsing for web scraping
 - `requests` - HTTP requests
-- `duckduckgo-search` - Official DuckDuckGo search API (optional but recommended)
+- `ddgs` - Official DuckDuckGo search API (optional but recommended)
 - `colorama` - Cross-platform colored terminal output
 - `tqdm` - Progress bars
 

@@ -54,7 +54,7 @@ uk-university-financials/
 
 - `beautifulsoup4` - HTML parsing
 - `requests` - HTTP requests
-- `duckduckgo-search` - Search API
+- `ddgs` - Search API
 - `colorama` - Colored output
 - `tqdm` - Progress bars
 

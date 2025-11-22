@@ -1,5 +1,5 @@
 beautifulsoup4>=4.9.3
 requests>=2.25.1
-duckduckgo-search>=3.8.0
+ddgs>=3.8.0
 colorama>=0.4.4
 tqdm>=4.62.0
