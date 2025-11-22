@@ -68,10 +68,33 @@ source venv/bin/activate
 python university_financials.py
 ```
 
-3. Deactivate when done:
+3. For verbose debugging output:
+
+```bash
+python university_financials.py -v
+# or
+python university_financials.py --verbose
+```
+
+4. Deactivate when done:
 
 ```bash
 deactivate
+```
+
+### Verbose Mode
+
+Use `-v` or `--verbose` flag for detailed debugging output that shows:
+- All search terms generated for each university
+- Each search result with title and URL
+- Relevance checking details with matched keywords
+- Link duplicate detection
+- Full search progress with numbered items
+- Color-coded DEBUG level messages
+
+Example:
+```bash
+python university_financials.py --verbose
 ```
 
 The script will:

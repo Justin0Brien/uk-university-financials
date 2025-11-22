@@ -19,12 +19,32 @@ source venv/bin/activate
 # or use the helper:
 ./activate.sh
 
-# Run the script
+# Run the script (normal mode)
 python university_financials.py
+
+# Run with verbose debugging output
+python university_financials.py -v
+python university_financials.py --verbose
 
 # When done
 deactivate
 ```
+
+## 🔍 Verbose Mode
+
+Enable detailed debugging with `-v` or `--verbose`:
+
+```bash
+python university_financials.py --verbose
+```
+
+**Shows:**
+- 🔎 All search terms for each university
+- 📋 Every search result with title and URL
+- ✅ Relevance checking with matched keywords
+- 🔄 Duplicate detection
+- 📊 Numbered progress for all operations
+- 🎨 Color-coded DEBUG messages
 
 ## 📁 Project Structure
 

@@ -91,13 +91,15 @@ if _HAVE_COLORAMA:
 
 
 # Configure logging
-def setup_logging(log_file: Optional[str] = None) -> logging.Logger:
+def setup_logging(log_file: Optional[str] = None, verbose: bool = False) -> logging.Logger:
     """Configure logging with both file and console handlers.
     
     Parameters
     ----------
     log_file : Optional[str]
         Path to log file. If None, creates timestamped log in current directory.
+    verbose : bool
+        If True, show DEBUG level logs in console. Default False (INFO only).
     
     Returns
     -------
@@ -127,17 +129,22 @@ def setup_logging(log_file: Optional[str] = None) -> logging.Logger:
     except Exception as e:
         print(f"{Fore.RED}Warning: Could not create log file: {e}{Style.RESET_ALL}")
     
-    # Console handler - concise logs
+    # Console handler - concise logs (or verbose if requested)
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.INFO)
-    console_formatter = logging.Formatter('%(levelname)s: %(message)s')
+    console_handler.setLevel(logging.DEBUG if verbose else logging.INFO)
+    if verbose:
+        console_formatter = logging.Formatter(
+            f'{Fore.CYAN}%(levelname)s{Style.RESET_ALL} [%(funcName)s]: %(message)s'
+        )
+    else:
+        console_formatter = logging.Formatter('%(levelname)s: %(message)s')
     console_handler.setFormatter(console_formatter)
     logger.addHandler(console_handler)
     
     return logger
 
 
-# Global logger instance
+# Global logger instance (will be reconfigured in main with verbose setting)
 logger = setup_logging()
 
 
@@ -382,16 +389,18 @@ def _ddg_search(query: str, max_results: int = 5) -> List[str]:
     
     results: List[str] = []
     try:
-        logger.debug(f"Searching with ddgs: '{query}' (max_results={max_results})")
+        logger.debug(f"{Fore.YELLOW}→ Searching with ddgs: '{query}' (max_results={max_results}){Style.RESET_ALL}")
         with DDGS() as ddgs:
-            for r in ddgs.text(query, region="uk-en", max_results=max_results):
+            for idx, r in enumerate(ddgs.text(query, region="uk-en", max_results=max_results), 1):
                 if not isinstance(r, dict):
                     logger.warning(f"Unexpected result type: {type(r)}")
                     continue
                 href = r.get("href")
+                title = r.get("title", "N/A")
                 if href and isinstance(href, str):
                     results.append(href)
-                    logger.debug(f"Found result: {href}")
+                    logger.debug(f"{Fore.GREEN}  [{idx}] {title}{Style.RESET_ALL}")
+                    logger.debug(f"      {Fore.CYAN}{href}{Style.RESET_ALL}")
         logger.info(f"{Fore.GREEN}DDG search returned {len(results)} results{Style.RESET_ALL}")
     except Exception as e:
         logger.error(f"Error in _ddg_search for query '{query}': {e}", exc_info=True)
@@ -437,11 +446,12 @@ def _scrape_duckduckgo_html(query: str, max_results: int = 5) -> List[str]:
         soup = BeautifulSoup(resp.text, "html.parser")
         links: List[str] = []
         
-        for a in soup.select("a.result__a"):
+        for idx, a in enumerate(soup.select("a.result__a"), 1):
             href = a.get("href")
             if href and isinstance(href, str):
                 links.append(href)
-                logger.debug(f"Found link: {href}")
+                logger.debug(f"{Fore.GREEN}  [{idx}] {a.get_text(strip=True)[:60]}{Style.RESET_ALL}")
+                logger.debug(f"      {Fore.CYAN}{href}{Style.RESET_ALL}")
                 if len(links) >= max_results:
                     break
         
@@ -471,16 +481,16 @@ def search_links(query: str, max_results: int = 5) -> List[str]:
         logger.error("Empty query provided to search_links")
         return []
     
-    logger.debug(f"Searching for: '{query}'")
+    logger.debug(f"{Fore.YELLOW}━━━ Searching for: '{query}' ━━━{Style.RESET_ALL}")
     
     # Try official DDG library first
     results = _ddg_search(query, max_results=max_results)
     if results:
-        logger.info(f"{Fore.GREEN}Found {len(results)} results using ddgs{Style.RESET_ALL}")
+        logger.info(f"{Fore.GREEN}✓ Found {len(results)} results using ddgs{Style.RESET_ALL}")
         return results
     
     # Fallback to HTML scraping
-    logger.info(f"{Fore.YELLOW}Falling back to HTML scraping...{Style.RESET_ALL}")
+    logger.info(f"{Fore.YELLOW}⚠ Falling back to HTML scraping...{Style.RESET_ALL}")
     results = _scrape_duckduckgo_html(query, max_results=max_results)
     
     if not results:
@@ -525,12 +535,13 @@ def is_relevant_url(url: str, university: University) -> bool:
         query = parsed.query.lower()
         full_url_lower = f"{path} {query}"
         
-        has_keyword = any(k in full_url_lower for k in keywords)
+        found_keywords = [k for k in keywords if k in full_url_lower]
+        has_keyword = len(found_keywords) > 0
         
         if has_keyword:
-            logger.debug(f"{Fore.GREEN}Relevant URL found: {url}{Style.RESET_ALL}")
+            logger.debug(f"{Fore.GREEN}✓ Relevant URL (keywords: {', '.join(found_keywords)}): {url}{Style.RESET_ALL}")
         else:
-            logger.debug(f"URL lacks financial keywords: {url}")
+            logger.debug(f"{Fore.YELLOW}✗ URL lacks financial keywords: {url}{Style.RESET_ALL}")
         
         return has_keyword
         
@@ -567,7 +578,9 @@ def find_financial_statements(university: University, max_links: int = 5) -> Lis
             logger.error(f"Invalid university object: {university}")
             return []
         
+        logger.info(f"{Fore.CYAN}{'='*80}{Style.RESET_ALL}")
         logger.info(f"{Fore.CYAN}Searching for: {university.name}{Style.RESET_ALL}")
+        logger.info(f"{Fore.CYAN}{'='*80}{Style.RESET_ALL}")
         
         found: List[str] = []
         seen: set[str] = set()
@@ -577,20 +590,24 @@ def find_financial_statements(university: University, max_links: int = 5) -> Lis
             logger.warning(f"No search terms generated for {university.name}")
             return []
         
+        logger.debug(f"{Fore.MAGENTA}Will search using {len(search_terms)} terms{Style.RESET_ALL}")
+        
         # Use tqdm progress bar if available
         term_iterator = tqdm(search_terms, desc=f"Searching", leave=False, disable=not _HAVE_TQDM) if _HAVE_TQDM else search_terms
         
-        for term in term_iterator:
+        for term_idx, term in enumerate(term_iterator, 1):
             try:
-                logger.debug(f"Searching term: '{term}'")
+                logger.debug(f"\n{Fore.MAGENTA}[Term {term_idx}/{len(search_terms)}] Searching: '{term}'{Style.RESET_ALL}")
                 links = search_links(term, max_results=10)
+                logger.debug(f"{Fore.CYAN}Retrieved {len(links)} links from search{Style.RESET_ALL}")
                 
-                for link in links:
+                for link_idx, link in enumerate(links, 1):
                     if link in seen:
-                        logger.debug(f"Skipping duplicate link: {link}")
+                        logger.debug(f"{Fore.YELLOW}  [{link_idx}] ⊘ Duplicate (already seen): {link}{Style.RESET_ALL}")
                         continue
                     
                     seen.add(link)
+                    logger.debug(f"{Fore.CYAN}  [{link_idx}] Checking relevance...{Style.RESET_ALL}")
                     
                     if is_relevant_url(link, university):
                         found.append(link)
@@ -619,9 +636,22 @@ def find_financial_statements(university: University, max_links: int = 5) -> Lis
         return []
 
 
-def main() -> None:
-    """Iterate over universities and print candidate financial statement URLs."""
+def main(verbose: bool = False) -> None:
+    """Iterate over universities and print candidate financial statement URLs.
+    
+    Parameters
+    ----------
+    verbose : bool
+        If True, show detailed DEBUG logs including search terms and URLs.
+    """
+    global logger
+    
     try:
+        # Reconfigure logger with verbose setting if needed
+        if verbose:
+            logger = setup_logging(verbose=True)
+            logger.info(f"{Fore.MAGENTA}{Style.BRIGHT}🔍 VERBOSE MODE ENABLED - Detailed debugging output activated{Style.RESET_ALL}")
+        
         # Print header
         print(f"\n{Fore.CYAN}{Style.BRIGHT}{'='*80}{Style.RESET_ALL}")
         print(f"{Fore.CYAN}{Style.BRIGHT}UK University Financial Statements Finder{Style.RESET_ALL}")
@@ -704,8 +734,28 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(
+        description='Find financial statement URLs for UK universities',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Examples:
+  python university_financials.py              # Normal mode
+  python university_financials.py -v           # Verbose mode (detailed debugging)
+  python university_financials.py --verbose    # Same as -v
+        '''
+    )
+    parser.add_argument(
+        '-v', '--verbose',
+        action='store_true',
+        help='Enable verbose logging (shows search terms, URLs, and detailed debug info)'
+    )
+    
+    args = parser.parse_args()
+    
     try:
-        main()
+        main(verbose=args.verbose)
     except Exception as e:
         print(f"{Fore.RED}Unhandled exception: {e}{Style.RESET_ALL}")
         logger.error(f"Unhandled exception: {e}", exc_info=True)
