@@ -158,10 +158,50 @@ class University:
         The official name of the institution.
     country: str
         Country within the UK (England, Scotland, Wales or Northern Ireland).
+    domain: Optional[str]
+        The university's primary web domain (e.g., 'cam.ac.uk'). Cached after first lookup.
     """
 
     name: str
     country: str
+    domain: Optional[str] = None
+
+    def get_domain(self) -> Optional[str]:
+        """Extract or infer the university's primary domain.
+        
+        Returns
+        -------
+        Optional[str]
+            The domain (e.g., 'cam.ac.uk') or None if not found.
+        """
+        if self.domain:
+            return self.domain
+        
+        try:
+            # Quick search to find the university's website
+            logger.debug(f"Detecting domain for {self.name}...")
+            query = f"{self.name} site:ac.uk"
+            
+            # Use a simple search to find the main site
+            if not _HAVE_DDG:
+                return None
+                
+            from ddgs import DDGS
+            with DDGS() as ddgs:
+                for r in ddgs.text(query, region="uk-en", max_results=3):
+                    href = r.get("href", "")
+                    if href:
+                        parsed = urlparse(href)
+                        domain = parsed.netloc.lower()
+                        # Verify it looks like a university domain
+                        if domain.endswith(".ac.uk"):
+                            self.domain = domain
+                            logger.info(f"{Fore.GREEN}Detected domain for {self.name}: {domain}{Style.RESET_ALL}")
+                            return domain
+        except Exception as e:
+            logger.warning(f"Could not detect domain for {self.name}: {e}")
+        
+        return None
 
     def search_terms(self) -> List[str]:
         """Return a list of search terms for this university.
@@ -177,13 +217,27 @@ class University:
                 logger.error(f"Invalid university name: {self.name}")
                 return []
             
-            terms = [
-                f"{self.name} financial statements",
-                f"{self.name} annual report",
-                f"{self.name} financial statements site:ac.uk",
-                f"{self.name} accounts pdf",
-            ]
-            logger.debug(f"Generated {len(terms)} search terms for {self.name}")
+            # Get the university's domain for site-specific searches
+            domain = self.get_domain()
+            
+            if domain:
+                # Domain-specific searches to ensure we only get this university's info
+                terms = [
+                    f"site:{domain} financial statements",
+                    f"site:{domain} annual report accounts",
+                    f"site:{domain} audited financial statements",
+                    f"site:{domain} annual accounts report",
+                    f"site:{domain} financial report",
+                ]
+            else:
+                # Fallback to name-based searches if domain not found
+                terms = [
+                    f'"{self.name}" financial statements site:ac.uk',
+                    f'"{self.name}" annual report accounts site:ac.uk',
+                    f'"{self.name}" audited accounts site:ac.uk',
+                ]
+            
+            logger.debug(f"Generated {len(terms)} search terms for {self.name} (domain: {domain or 'not detected'})")
             return terms
         except Exception as e:
             logger.error(f"Error generating search terms for {self.name}: {e}", exc_info=True)
@@ -502,12 +556,11 @@ def search_links(query: str, max_results: int = 5) -> List[str]:
 def is_relevant_url(url: str, university: University) -> bool:
     """Heuristic to decide whether a URL is likely to contain financial statements.
 
-    The function checks that the URL belongs to an academic domain (ends
-    with ``.ac.uk``) or the university's own domain and contains
-    keywords suggesting it hosts financial statements or annual
-    reports.  This is a simple heuristic and may produce false
-    positives or negatives; you may refine it according to your
-    specific needs.
+    The function checks:
+    1. URL belongs to the specific university's domain
+    2. Contains financial statement keywords
+    3. Excludes course/degree/study programme pages
+    4. Prefers governance/about/corporate sections
     """
     try:
         if not url or not isinstance(url, str):
@@ -516,41 +569,105 @@ def is_relevant_url(url: str, university: University) -> bool:
         
         parsed = urlparse(url)
         domain = parsed.netloc.lower()
+        path = parsed.path.lower()
+        query = parsed.query.lower()
+        full_url_lower = f"{path} {query}"
         
         if not domain:
             logger.debug(f"No domain found in URL: {url}")
             return False
         
-        # Check for academic domains
-        academic_suffixes = (".ac.uk", ".edu", ".edu.uk")
-        is_academic = any(domain.endswith(suffix) for suffix in academic_suffixes)
-        
-        if not is_academic:
-            logger.debug(f"URL not from academic domain: {url}")
+        # 1. Check if URL is from the university's specific domain
+        uni_domain = university.get_domain()
+        if uni_domain and domain != uni_domain:
+            logger.debug(f"{Fore.YELLOW}✗ Wrong domain: {domain} (expected {uni_domain}): {url}{Style.RESET_ALL}")
             return False
         
-        # Check for financial keywords
-        keywords = ["financial", "statements", "accounts", "annual", "report"]
-        path = parsed.path.lower()
-        query = parsed.query.lower()
-        full_url_lower = f"{path} {query}"
+        # If we don't have a specific domain, at least check it's academic
+        if not uni_domain:
+            academic_suffixes = (".ac.uk", ".edu", ".edu.uk")
+            is_academic = any(domain.endswith(suffix) for suffix in academic_suffixes)
+            if not is_academic:
+                logger.debug(f"URL not from academic domain: {url}")
+                return False
         
-        found_keywords = [k for k in keywords if k in full_url_lower]
-        has_keyword = len(found_keywords) > 0
+        # 2. EXCLUDE course/degree/study content (common false positives)
+        exclude_patterns = [
+            "courses", "course", "study", "undergraduate", "postgraduate",
+            "taught", "degree", "msc", "mba", "bsc", "ba", "phd",
+            "programme", "program", "student", "prospectus",
+            "admissions", "apply", "entry", "module", "finance-course",
+            "accounting-course", "business-school", "/courses/", "/study/"
+        ]
         
-        if has_keyword:
-            logger.debug(f"{Fore.GREEN}✓ Relevant URL (keywords: {', '.join(found_keywords)}): {url}{Style.RESET_ALL}")
+        if any(pattern in full_url_lower for pattern in exclude_patterns):
+            logger.debug(f"{Fore.YELLOW}✗ Excluded (course/degree content): {url}{Style.RESET_ALL}")
+            return False
+        
+        # 3. Check for financial statement keywords
+        financial_keywords = [
+            "financial-statement", "financial_statement",
+            "annual-report", "annual_report", "annual-review",
+            "audited-account", "audited_account",
+            "financial-account", "accounts",
+            "finance/report", "governance/finance", "about/finance"
+        ]
+        
+        has_financial_keyword = any(kw in full_url_lower for kw in financial_keywords)
+        
+        # 4. Also check for PDF files with financial terms
+        is_financial_pdf = (
+            path.endswith(".pdf") and 
+            any(term in full_url_lower for term in ["financial", "annual", "account", "report"])
+        )
+        
+        # 5. Prefer governance/corporate/about sections
+        preferred_sections = [
+            "/governance/", "/about/", "/corporate/", "/finance/",
+            "/report/", "/publication/", "/document/"
+        ]
+        in_preferred_section = any(section in path for section in preferred_sections)
+        
+        is_relevant = has_financial_keyword or is_financial_pdf
+        
+        if is_relevant:
+            section_bonus = " [preferred section]" if in_preferred_section else ""
+            logger.debug(f"{Fore.GREEN}✓ Relevant URL{section_bonus}: {url}{Style.RESET_ALL}")
         else:
-            logger.debug(f"{Fore.YELLOW}✗ URL lacks financial keywords: {url}{Style.RESET_ALL}")
+            logger.debug(f"{Fore.YELLOW}✗ URL lacks financial statement keywords: {url}{Style.RESET_ALL}")
         
-        return has_keyword
+        return is_relevant
         
     except Exception as e:
         logger.error(f"Error checking URL relevance for '{url}': {e}", exc_info=True)
         return False
 
 
-def find_financial_statements(university: University, max_links: int = 5) -> List[str]:
+def extract_year_from_url(url: str) -> Optional[int]:
+    """Extract year from URL or filename to help sort financial reports chronologically.
+    
+    Parameters
+    ----------
+    url : str
+        The URL to extract year from
+        
+    Returns
+    -------
+    Optional[int]
+        The year if found, None otherwise
+    """
+    import re
+    # Look for 4-digit years (2000-2099)
+    year_pattern = r'(20\d{2})'
+    matches = re.findall(year_pattern, url)
+    if matches:
+        # Return the most recent year found
+        years = [int(y) for y in matches]
+        return max(years)
+    return None
+
+
+def find_financial_statements(university: University, max_links: int = 20) -> List[str]:
     """Attempt to locate URLs for a university's financial statements.
 
     The function iterates over a set of search terms for the given
@@ -598,7 +715,8 @@ def find_financial_statements(university: University, max_links: int = 5) -> Lis
         for term_idx, term in enumerate(term_iterator, 1):
             try:
                 logger.debug(f"\n{Fore.MAGENTA}[Term {term_idx}/{len(search_terms)}] Searching: '{term}'{Style.RESET_ALL}")
-                links = search_links(term, max_results=10)
+                # Request more results to find multiple years of reports
+                links = search_links(term, max_results=30)
                 logger.debug(f"{Fore.CYAN}Retrieved {len(links)} links from search{Style.RESET_ALL}")
                 
                 for link_idx, link in enumerate(links, 1):
@@ -626,6 +744,17 @@ def find_financial_statements(university: University, max_links: int = 5) -> Lis
         
         if found:
             logger.info(f"{Fore.GREEN}Found {len(found)} link(s) for {university.name}{Style.RESET_ALL}")
+            # Sort by year (most recent first)
+            found_with_years = [(url, extract_year_from_url(url)) for url in found]
+            # Sort: URLs with years first (descending), then URLs without years
+            found_sorted = sorted(found_with_years, key=lambda x: (x[1] is None, -(x[1] if x[1] else 0)))
+            found = [url for url, year in found_sorted]
+            
+            # Log the sorted order with years
+            logger.debug(f"{Fore.MAGENTA}Sorted results by year:{Style.RESET_ALL}")
+            for idx, (url, year) in enumerate(found_sorted, 1):
+                year_str = f"[{year}]" if year else "[no year]"
+                logger.debug(f"  {idx}. {year_str} {url}")
         else:
             logger.warning(f"{Fore.YELLOW}No links found for {university.name}{Style.RESET_ALL}")
         
@@ -685,7 +814,8 @@ def main(verbose: bool = False) -> None:
         
         for uni in uni_iterator:
             try:
-                urls = find_financial_statements(uni, max_links=5)
+                # Request more links to capture multiple years of financial reports
+                urls = find_financial_statements(uni, max_links=20)
                 processed += 1
                 
                 # Print results
@@ -695,7 +825,9 @@ def main(verbose: bool = False) -> None:
                     successful += 1
                     total_urls += len(urls)
                     for u in urls:
-                        print(f"  {Fore.GREEN}✓{Style.RESET_ALL} {u}")
+                        year = extract_year_from_url(u)
+                        year_tag = f" {Fore.BLUE}[{year}]{Style.RESET_ALL}" if year else ""
+                        print(f"  {Fore.GREEN}✓{Style.RESET_ALL}{year_tag} {u}")
                 else:
                     print(f"  {Fore.YELLOW}⚠ No obvious financial statement pages found{Style.RESET_ALL}")
                 
