@@ -8,8 +8,14 @@ This script automatically searches for and identifies financial statement URLs f
 - 📝 **Detailed Logging**: Dual logging system (console + file) with timestamped log files
 - 🎨 **Colored Terminal Output**: Easy-to-read colored console output using colorama
 - 📊 **Progress Bars**: Visual progress tracking with tqdm
+- 💾 **CSV Export**: Automatically saves all results to timestamped CSV file
 - 🔍 **Smart Search**: Uses DuckDuckGo with automatic fallback to HTML scraping
 - 📈 **Statistics**: Detailed summary of search results and success rates
+- 🐛 **Verbose Mode**: Detailed debugging output with `-v` flag
+- 🎯 **Domain-Specific Search**: Targets each university's specific domain for accuracy
+- 📅 **Multi-Year Detection**: Finds financial statements from multiple years (2000-2099)
+- ⚡ **Retry Logic**: Automatically retries failed searches with exponential backoff
+- 🛡️ **Rate Limiting**: Built-in delays to respect search engine limits
 
 ## Installation
 
@@ -101,7 +107,8 @@ The script will:
 1. Load a list of 180+ UK universities
 2. Search for financial statement URLs for each university
 3. Display results with colored output and progress bars
-4. Generate a timestamped log file with detailed information
+4. Save all results to a timestamped CSV file
+5. Generate a timestamped log file with detailed information
 
 ## Output
 
@@ -109,6 +116,11 @@ The script will:
 - Colored status messages (green for success, yellow for warnings, red for errors)
 - Progress bars showing search progress
 - Summary statistics at the end
+
+### CSV File
+- Automatically generated with timestamped filename (e.g., `university_financials_results_20251122_143022.csv`)
+- Contains columns: University, Country, Domain, Year, URL
+- Ready for data analysis in Excel, Python, R, etc.
 
 ### Log Files
 - Timestamped log files (e.g., `university_financials_20251122_143022.log`)

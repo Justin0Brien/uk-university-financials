@@ -46,6 +46,7 @@ completeness, the major universities in those nations are included.
 
 from __future__ import annotations
 
+import csv
 import html
 import logging
 import re
@@ -795,6 +796,47 @@ def find_financial_statements(university: University, max_links: int = 20) -> Li
         return []
 
 
+def save_results_to_csv(results: List[dict], filename: Optional[str] = None) -> str:
+    """Save search results to a CSV file.
+    
+    Parameters
+    ----------
+    results : List[dict]
+        List of result dictionaries with keys: university, country, domain, year, url
+    filename : Optional[str]
+        Output filename. If None, generates timestamped filename.
+    
+    Returns
+    -------
+    str
+        Path to the created CSV file
+    """
+    if filename is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"university_financials_results_{timestamp}.csv"
+    
+    try:
+        with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
+            fieldnames = ['University', 'Country', 'Domain', 'Year', 'URL']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            
+            writer.writeheader()
+            for result in results:
+                writer.writerow({
+                    'University': result['university'],
+                    'Country': result['country'],
+                    'Domain': result.get('domain', 'N/A'),
+                    'Year': result.get('year', 'N/A'),
+                    'URL': result['url']
+                })
+        
+        logger.info(f"{Fore.GREEN}Results saved to: {filename}{Style.RESET_ALL}")
+        return filename
+    except Exception as e:
+        logger.error(f"Error saving CSV file: {e}", exc_info=True)
+        return ""
+
+
 def main(verbose: bool = False) -> None:
     """Iterate over universities and print candidate financial statement URLs.
     
@@ -842,6 +884,9 @@ def main(verbose: bool = False) -> None:
         successful = 0
         total_urls = 0
         
+        # Store all results for CSV export
+        all_results = []
+        
         # Use tqdm progress bar if available
         uni_iterator = tqdm(universities, desc="Processing universities", unit="uni") if _HAVE_TQDM else universities
         
@@ -861,6 +906,15 @@ def main(verbose: bool = False) -> None:
                         year = extract_year_from_url(u)
                         year_tag = f" {Fore.BLUE}[{year}]{Style.RESET_ALL}" if year else ""
                         print(f"  {Fore.GREEN}✓{Style.RESET_ALL}{year_tag} {u}")
+                        
+                        # Store result for CSV
+                        all_results.append({
+                            'university': uni.name,
+                            'country': uni.country,
+                            'domain': uni.domain or 'N/A',
+                            'year': year if year else 'N/A',
+                            'url': u
+                        })
                 else:
                     print(f"  {Fore.YELLOW}⚠ No obvious financial statement pages found{Style.RESET_ALL}")
                 
@@ -891,6 +945,15 @@ def main(verbose: bool = False) -> None:
         
         print(f"{Fore.CYAN}{Style.BRIGHT}{'='*80}{Style.RESET_ALL}\n")
         
+        # Save results to CSV
+        if all_results:
+            csv_file = save_results_to_csv(all_results)
+            if csv_file:
+                print(f"\n{Fore.GREEN}{Style.BRIGHT}📄 Results saved to: {csv_file}{Style.RESET_ALL}")
+                logger.info(f"Saved {len(all_results)} results to {csv_file}")
+        else:
+            logger.warning("No results to save to CSV")
+        
         logger.info(f"{Fore.GREEN}Search completed successfully{Style.RESET_ALL}")
         
     except KeyboardInterrupt:
@@ -912,6 +975,11 @@ Examples:
   python university_financials.py              # Normal mode
   python university_financials.py -v           # Verbose mode (detailed debugging)
   python university_financials.py --verbose    # Same as -v
+
+Output:
+  - Console: Displays all found URLs with year tags
+  - CSV: Automatically saves to university_financials_results_TIMESTAMP.csv
+  - Log: Saves detailed logs to university_financials_TIMESTAMP.log
         '''
     )
     parser.add_argument(
