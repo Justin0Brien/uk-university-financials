@@ -13,7 +13,31 @@ This script automatically searches for and identifies financial statement URLs f
 
 ## Installation
 
-1. Install required dependencies:
+### Option 1: Automated Setup (Recommended)
+
+Run the installation script which will create a virtual environment and install all dependencies:
+
+```bash
+./install.sh
+```
+
+### Option 2: Manual Installation
+
+1. Create a virtual environment:
+
+```bash
+python3 -m venv venv
+```
+
+2. Activate the virtual environment:
+
+```bash
+source venv/bin/activate  # On macOS/Linux
+# or
+venv\Scripts\activate  # On Windows
+```
+
+3. Install dependencies:
 
 ```bash
 pip install -r requirements.txt
@@ -29,10 +53,25 @@ pip install -r requirements.txt
 
 ## Usage
 
-Run the script directly:
+### Quick Start
+
+1. Activate the virtual environment:
+
+```bash
+source venv/bin/activate
+# or use the helper script: ./activate.sh
+```
+
+2. Run the script directly:
 
 ```bash
 python university_financials.py
+```
+
+3. Deactivate when done:
+
+```bash
+deactivate
 ```
 
 The script will:

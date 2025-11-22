@@ -3,23 +3,49 @@
 # Installation script for UK University Financial Statements Finder
 
 echo "======================================"
-echo "Installing dependencies..."
+echo "UK University Financials Setup"
 echo "======================================"
+echo ""
 
-# Check if pip is available
-if ! command -v pip3 &> /dev/null && ! command -v pip &> /dev/null
+# Check if Python is available
+if ! command -v python3 &> /dev/null
 then
-    echo "Error: pip is not installed. Please install Python and pip first."
+    echo "Error: Python 3 is not installed. Please install Python 3 first."
     exit 1
 fi
 
-# Use pip3 if available, otherwise use pip
-PIP_CMD=$(command -v pip3 || command -v pip)
+echo "✓ Python 3 found: $(python3 --version)"
 
-echo "Using: $PIP_CMD"
+# Create virtual environment if it doesn't exist
+if [ ! -d "venv" ]; then
+    echo ""
+    echo "Creating virtual environment..."
+    python3 -m venv venv
+    
+    if [ $? -eq 0 ]; then
+        echo "✓ Virtual environment created"
+    else
+        echo "✗ Failed to create virtual environment"
+        exit 1
+    fi
+else
+    echo "✓ Virtual environment already exists"
+fi
+
+# Activate virtual environment
+echo ""
+echo "Activating virtual environment..."
+source venv/bin/activate
+
+# Upgrade pip
+echo ""
+echo "Upgrading pip..."
+pip install --upgrade pip --quiet
 
 # Install dependencies
-$PIP_CMD install -r requirements.txt
+echo ""
+echo "Installing dependencies..."
+pip install -r requirements.txt
 
 if [ $? -eq 0 ]; then
     echo ""
@@ -27,11 +53,19 @@ if [ $? -eq 0 ]; then
     echo "✓ Installation completed successfully!"
     echo "======================================"
     echo ""
-    echo "You can now run the script with:"
-    echo "  python3 university_financials.py"
+    echo "To use the virtual environment:"
     echo ""
-    echo "or:"
-    echo "  python university_financials.py"
+    echo "  1. Activate it:"
+    echo "     source venv/bin/activate"
+    echo ""
+    echo "  2. Run the script:"
+    echo "     python university_financials.py"
+    echo ""
+    echo "  3. Deactivate when done:"
+    echo "     deactivate"
+    echo ""
+    echo "Tip: You can also use ./activate.sh for easier activation"
+    echo "======================================"
 else
     echo ""
     echo "======================================"
