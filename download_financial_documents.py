@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import json
 import logging
 import os
 import re
@@ -114,6 +115,58 @@ class FinancialDocument:
             return f"{safe_uni}{year_part}_{self.filename}"
         else:
             return f"{safe_uni}{year_part}.pdf"
+
+
+def load_download_state(state_file: str = "download_state.json") -> dict:
+    """Load the download state from a JSON file.
+    
+    Parameters
+    ----------
+    state_file : str
+        Path to state file
+    
+    Returns
+    -------
+    dict
+        Dictionary with 'downloaded_urls' set and 'downloaded_files' set
+    """
+    if os.path.exists(state_file):
+        try:
+            with open(state_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return {
+                    'downloaded_urls': set(data.get('downloaded_urls', [])),
+                    'downloaded_files': set(data.get('downloaded_files', []))
+                }
+        except Exception as e:
+            logger.warning(f"Could not load state file: {e}")
+    
+    return {'downloaded_urls': set(), 'downloaded_files': set()}
+
+
+def save_download_state(downloaded_urls: Set[str], downloaded_files: Set[str], 
+                       state_file: str = "download_state.json") -> None:
+    """Save the download state to a JSON file.
+    
+    Parameters
+    ----------
+    downloaded_urls : Set[str]
+        Set of successfully downloaded URLs
+    downloaded_files : Set[str]
+        Set of successfully downloaded file paths
+    state_file : str
+        Path to state file
+    """
+    try:
+        data = {
+            'downloaded_urls': list(downloaded_urls),
+            'downloaded_files': list(downloaded_files),
+            'last_updated': datetime.now().isoformat()
+        }
+        with open(state_file, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        logger.error(f"Could not save state file: {e}", exc_info=True)
 
 
 def setup_logging(verbose: bool = False, log_dir: str = "logs") -> logging.Logger:
@@ -589,7 +642,8 @@ def download_document(doc: FinancialDocument, output_dir: str, session: requests
 
 def process_documents(documents: List[FinancialDocument], output_dir: str, 
                      scrape_pages: bool = True, max_docs: Optional[int] = None,
-                     use_playwright: bool = True, visible_browser: bool = False) -> dict:
+                     use_playwright: bool = True, visible_browser: bool = False,
+                     state_file: str = "download_state.json") -> dict:
     """Process and download all documents.
     
     Parameters
@@ -606,6 +660,8 @@ def process_documents(documents: List[FinancialDocument], output_dir: str,
         Whether to use Playwright as fallback
     visible_browser : bool
         Whether to use visible browser (for manual intervention)
+    state_file : str
+        Path to state file for tracking downloads
     
     Returns
     -------
@@ -618,6 +674,16 @@ def process_documents(documents: List[FinancialDocument], output_dir: str,
     # Create session
     session = create_session()
     
+    # Load previous download state
+    state = load_download_state(state_file)
+    downloaded_urls = state['downloaded_urls']
+    downloaded_files = state['downloaded_files']
+    
+    # Count previously downloaded
+    previously_downloaded = len(downloaded_urls)
+    if previously_downloaded > 0:
+        logger.info(f"{Fore.CYAN}Loaded state: {previously_downloaded} URLs already downloaded{Style.RESET_ALL}")
+    
     # Track statistics
     stats = {
         'total': len(documents),
@@ -625,6 +691,7 @@ def process_documents(documents: List[FinancialDocument], output_dir: str,
         'successful': 0,
         'failed': 0,
         'skipped': 0,
+        'previously_downloaded': previously_downloaded,
         'scraped_additional': 0,
         'methods': {
             'requests': 0,
@@ -632,10 +699,6 @@ def process_documents(documents: List[FinancialDocument], output_dir: str,
             'playwright_visible': 0
         }
     }
-    
-    # Track downloaded URLs to avoid duplicates
-    downloaded_urls = set()
-    downloaded_files = set()
     
     # Limit documents if specified
     if max_docs:
@@ -649,9 +712,9 @@ def process_documents(documents: List[FinancialDocument], output_dir: str,
         try:
             stats['processed'] += 1
             
-            # Skip duplicates
+            # Skip already downloaded URLs
             if doc.url in downloaded_urls:
-                logger.debug(f"Skipping duplicate URL: {doc.url}")
+                logger.debug(f"Skipping already downloaded URL: {doc.url}")
                 stats['skipped'] += 1
                 continue
             
@@ -694,6 +757,8 @@ def process_documents(documents: List[FinancialDocument], output_dir: str,
                             stats['methods'][method] += 1
                             downloaded_urls.add(doc_url)
                             downloaded_files.add(result)
+                            # Save state after each successful download
+                            save_download_state(downloaded_urls, downloaded_files, state_file)
                         else:
                             logger.warning(f"{Fore.YELLOW}✗ Failed: {result}{Style.RESET_ALL}")
                             stats['failed'] += 1
@@ -713,6 +778,8 @@ def process_documents(documents: List[FinancialDocument], output_dir: str,
                     stats['methods'][method] += 1
                     downloaded_urls.add(doc.url)
                     downloaded_files.add(result)
+                    # Save state after each successful download
+                    save_download_state(downloaded_urls, downloaded_files, state_file)
                 else:
                     logger.warning(f"{Fore.YELLOW}✗ Failed: {result}{Style.RESET_ALL}")
                     stats['failed'] += 1
@@ -826,7 +893,9 @@ def main(verbose: bool = False, max_docs: Optional[int] = None, scrape: bool = T
         print(f"Documents processed: {Fore.GREEN}{stats['processed']}/{stats['total']}{Style.RESET_ALL}")
         print(f"Successful downloads: {Fore.GREEN}{stats['successful']}{Style.RESET_ALL}")
         print(f"Failed downloads: {Fore.RED}{stats['failed']}{Style.RESET_ALL}")
-        print(f"Skipped (duplicates): {Fore.YELLOW}{stats['skipped']}{Style.RESET_ALL}")
+        print(f"Skipped (already downloaded): {Fore.YELLOW}{stats['skipped']}{Style.RESET_ALL}")
+        if stats['previously_downloaded'] > 0:
+            print(f"Previously downloaded (from state): {Fore.CYAN}{stats['previously_downloaded']}{Style.RESET_ALL}")
         print(f"Additional documents found: {Fore.CYAN}{stats['scraped_additional']}{Style.RESET_ALL}")
         
         print(f"\n{Fore.CYAN}Download methods used:{Style.RESET_ALL}")
