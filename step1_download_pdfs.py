@@ -68,6 +68,12 @@ try:
 except ImportError:
     _HAVE_PLAYWRIGHT = False
 
+try:
+    from ddgs import DDGS
+    _HAVE_DDGS = True
+except ImportError:
+    _HAVE_DDGS = False
+
 
 # Global logger
 logger: logging.Logger = None
@@ -119,7 +125,7 @@ class FinancialDocument:
 
 def search_for_documents(query: str, max_results: int = 10) -> List[FinancialDocument]:
     """
-    Search for financial documents using Google search.
+    Search for financial documents using DuckDuckGo search.
     
     Parameters
     ----------
@@ -133,60 +139,54 @@ def search_for_documents(query: str, max_results: int = 10) -> List[FinancialDoc
     List[FinancialDocument]
         List of documents found matching the query
     """
-    if not _HAVE_REQUESTS:
-        logger.warning("Requests library not available for searching")
+    if not _HAVE_DDGS:
+        logger.warning("DuckDuckGo search library not available. Install with: pip install ddgs")
         return []
     
     documents = []
     
     try:
-        # Use Google search (simple scraping approach)
-        # Note: For production, consider using official Google Custom Search API
-        search_url = "https://www.google.com/search"
-        params = {
-            'q': query + ' filetype:pdf',
-            'num': max_results
-        }
+        # Use DuckDuckGo search - include PDF in query text instead of filetype operator
+        search_query = f"{query} PDF"
+        logger.info(f"Searching DuckDuckGo for: {search_query}")
         
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-        }
-        
-        session = create_session()
-        response = session.get(search_url, params=params, headers=headers, timeout=10)
-        
-        if response.status_code == 200 and _HAVE_BS4:
-            soup = BeautifulSoup(response.content, 'html.parser')
+        with DDGS(timeout=20) as ddgs:
+            # Get more results than needed to filter for PDFs
+            search_limit = max_results * 5  # Get 5x results to ensure enough PDFs
+            results = list(ddgs.text(search_query, max_results=search_limit))
             
-            # Extract PDF links from search results
-            for link in soup.find_all('a', href=True):
-                href = link['href']
+            logger.debug(f"Got {len(results)} total results from search")
+            
+            for result in results:
+                url = result.get('href', '')
+                title = result.get('title', '')
                 
-                # Google search results have URLs in /url?q=ACTUAL_URL format
-                if '/url?q=' in href:
-                    actual_url = href.split('/url?q=')[1].split('&')[0]
+                # Check if URL contains .pdf (case insensitive)
+                if url and '.pdf' in url.lower():
+                    # Extract university name from query (first few words)
+                    uni_name = ' '.join(query.split()[0:3])
                     
-                    # Check if it's a PDF
-                    if '.pdf' in actual_url.lower():
-                        # Extract university name from query or URL
-                        uni_name = query.split()[0:3]  # First few words usually contain uni name
-                        uni_name = ' '.join(uni_name)
-                        
-                        doc = FinancialDocument(
-                            university=uni_name,
-                            url=actual_url,
-                            source='search'
-                        )
-                        documents.append(doc)
-                        
-                        if len(documents) >= max_results:
-                            break
+                    doc = FinancialDocument(
+                        university=uni_name,
+                        url=url,
+                        source='search'
+                    )
+                    documents.append(doc)
+                    logger.debug(f"Found PDF: {title} - {url}")
+                    
+                    if len(documents) >= max_results:
+                        break
         
-        logger.info(f"Found {len(documents)} documents for query: {query}")
+        logger.info(f"Found {len(documents)} PDF documents for query: {query}")
+        
+        # Add delay to respect rate limits
+        if documents:
+            time.sleep(2)  # 2 second delay between searches
+        
         return documents
         
     except Exception as e:
-        logger.warning(f"Search failed: {e}")
+        logger.warning(f"DuckDuckGo search failed for '{query}': {e}")
         return []
 
 
@@ -921,7 +921,8 @@ def main(verbose: bool = False, max_docs: Optional[int] = None, scrape: bool = T
         # Handle custom search query
         if search_query:
             logger.info(f"{Fore.CYAN}Using custom search query: {search_query}{Style.RESET_ALL}")
-            all_documents = search_for_documents(search_query)
+            search_limit = max_docs if max_docs else 10
+            all_documents = search_for_documents(search_query, max_results=search_limit)
             
             if not all_documents:
                 logger.warning(f"{Fore.YELLOW}No documents found for query: {search_query}{Style.RESET_ALL}")
@@ -933,24 +934,24 @@ def main(verbose: bool = False, max_docs: Optional[int] = None, scrape: bool = T
             # Find CSV files
             results_files = list(Path('.').glob('university_financials_results_*.csv'))
             gemini_file = Path('gemini_list.csv')
-        
-        if not results_files and not gemini_file.exists():
-            logger.error(f"{Fore.RED}No CSV files found. Please run university_financials.py first.{Style.RESET_ALL}")
-            sys.exit(1)
-        
-        # Load from results files
-        for csv_file in results_files:
-            docs = load_csv_documents(str(csv_file))
-            all_documents.extend(docs)
-        
-        # Load from Gemini list
-        if gemini_file.exists():
-            docs = load_gemini_documents(str(gemini_file))
-            all_documents.extend(docs)
-        
-        if not all_documents:
-            logger.error(f"{Fore.RED}No documents found in CSV files.{Style.RESET_ALL}")
-            sys.exit(1)
+            
+            if not results_files and not gemini_file.exists():
+                logger.error(f"{Fore.RED}No CSV files found. Please run university_financials.py first.{Style.RESET_ALL}")
+                sys.exit(1)
+            
+            # Load from results files
+            for csv_file in results_files:
+                docs = load_csv_documents(str(csv_file))
+                all_documents.extend(docs)
+            
+            # Load from Gemini list
+            if gemini_file.exists():
+                docs = load_gemini_documents(str(gemini_file))
+                all_documents.extend(docs)
+            
+            if not all_documents:
+                logger.error(f"{Fore.RED}No documents found in CSV files.{Style.RESET_ALL}")
+                sys.exit(1)
         
         logger.info(f"{Fore.CYAN}Total documents to process: {len(all_documents)}{Style.RESET_ALL}")
         

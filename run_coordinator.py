@@ -69,8 +69,436 @@ def setup_logging(verbose: bool = False) -> None:
 
 
 # =============================================================================
+# iCloud Storage Configuration
+# =============================================================================
+
+def get_icloud_base_path() -> Path:
+    """
+    Get the iCloud storage base path for university metrics data.
+    All data files (PDFs, extracted text) are stored in iCloud to avoid GitHub size limits.
+    """
+    icloud_path = Path.home() / "Library" / "Mobile Documents" / "com~apple~CloudDocs" / "Nexus" / "Resources" / "Reference Data" / "unimetrics"
+    
+    # Ensure directories exist
+    (icloud_path / "downloads" / "pdfs").mkdir(parents=True, exist_ok=True)
+    (icloud_path / "extracted_text").mkdir(parents=True, exist_ok=True)
+    
+    return icloud_path
+
+
+def get_downloads_dir() -> Path:
+    """Get the downloads directory in iCloud."""
+    return get_icloud_base_path() / "downloads" / "pdfs"
+
+
+def get_extracted_text_dir() -> Path:
+    """Get the extracted text directory in iCloud."""
+    return get_icloud_base_path() / "extracted_text"
+
+
+# =============================================================================
+# Path Management - Relative vs Absolute
+# =============================================================================
+
+def get_project_root() -> Path:
+    """Get the project root directory (where this script is located)."""
+    return Path(__file__).parent.resolve()
+
+
+def to_relative_path(abs_path: str | Path) -> str:
+    """
+    Convert absolute path to path relative to iCloud base directory.
+    Returns empty string if path is None or empty.
+    
+    Examples:
+        /Users/justin/Library/.../unimetrics/downloads/pdfs/file.pdf -> downloads/pdfs/file.pdf
+        /Users/justin/Library/.../unimetrics/extracted_text/file.txt -> extracted_text/file.txt
+    """
+    if not abs_path:
+        return ""
+    
+    abs_path = Path(abs_path)
+    icloud_base = get_icloud_base_path()
+    
+    try:
+        # Get path relative to iCloud base
+        rel_path = abs_path.relative_to(icloud_base)
+        return str(rel_path)
+    except ValueError:
+        # Path is not relative to iCloud base, return as-is
+        logging.warning(f"Path {abs_path} is not within iCloud base {icloud_base}")
+        return str(abs_path)
+
+
+def to_absolute_path(rel_path: str | Path) -> Path:
+    """
+    Convert relative path to absolute path based on iCloud base directory.
+    If path is already absolute, return as-is.
+    Returns None if path is None or empty.
+    
+    Examples:
+        downloads/pdfs/file.pdf -> /Users/justin/Library/.../unimetrics/downloads/pdfs/file.pdf
+        extracted_text/file.txt -> /Users/justin/Library/.../unimetrics/extracted_text/file.txt
+    """
+    if not rel_path:
+        return None
+    
+    rel_path = Path(rel_path)
+    
+    # If already absolute, return as-is
+    if rel_path.is_absolute():
+        return rel_path
+    
+    # Make relative to iCloud base
+    icloud_base = get_icloud_base_path()
+    return (icloud_base / rel_path).resolve()
+
+
+# =============================================================================
+# HESA Provider Data (UKPRN Lookup)
+# =============================================================================
+
+# Global cache for HESA provider data
+_HESA_PROVIDERS = None
+
+def load_hesa_providers(csv_path: str = "ProviderAllHESAEnhanced.csv") -> Dict:
+    """
+    Load HESA provider data with UKPRN and standardized names.
+    
+    Returns dict with:
+        - 'ukprn_to_name': {ukprn -> official_name}
+        - 'name_to_ukprn': {normalized_name -> ukprn}
+        - 'all_providers': [{ukprn, name, ...}, ...]
+    """
+    global _HESA_PROVIDERS
+    
+    if _HESA_PROVIDERS is not None:
+        return _HESA_PROVIDERS
+    
+    csv_file = Path(csv_path)
+    if not csv_file.exists():
+        logging.warning(f"HESA provider file not found: {csv_path}")
+        _HESA_PROVIDERS = {
+            'ukprn_to_name': {},
+            'name_to_ukprn': {},
+            'all_providers': []
+        }
+        return _HESA_PROVIDERS
+    
+    ukprn_to_name = {}
+    name_to_ukprn = {}
+    all_providers = []
+    
+    try:
+        with open(csv_file, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                ukprn = row.get('UKPRN', '').strip()
+                name = row.get('ProviderName', '').strip()
+                
+                # Skip if no UKPRN or name
+                if not ukprn or not name:
+                    continue
+                
+                # Store mappings
+                ukprn_to_name[ukprn] = name
+                
+                # Create multiple name variants for matching
+                normalized = normalize_name_for_matching(name)
+                name_to_ukprn[normalized] = ukprn
+                
+                # Store provider record
+                all_providers.append({
+                    'ukprn': ukprn,
+                    'name': name,
+                    'instid': row.get('INSTID', ''),
+                    'country': row.get('CountryCode', ''),
+                    'category': row.get('CategoryName', '')
+                })
+        
+        logging.info(f"Loaded {len(ukprn_to_name)} HESA providers with UKPRN")
+        
+    except Exception as e:
+        logging.error(f"Error loading HESA providers: {e}")
+        ukprn_to_name = {}
+        name_to_ukprn = {}
+        all_providers = []
+    
+    _HESA_PROVIDERS = {
+        'ukprn_to_name': ukprn_to_name,
+        'name_to_ukprn': name_to_ukprn,
+        'all_providers': all_providers
+    }
+    
+    return _HESA_PROVIDERS
+
+
+def normalize_name_for_matching(name: str) -> str:
+    """
+    Normalize university name for matching.
+    
+    Removes common variations to help match filenames to HESA providers.
+    """
+    # Convert to lowercase
+    name = name.lower()
+    
+    # Remove "the" prefix
+    name = re.sub(r'^the\s+', '', name)
+    
+    # Normalize hyphens and apostrophes
+    name = name.replace('-', ' ')
+    name = name.replace("'", '')
+    
+    # Remove "university" suffix variations
+    name = re.sub(r'\s+university$', '', name)
+    name = re.sub(r'\s+uni$', '', name)
+    name = re.sub(r'\s+univ$', '', name)
+    
+    # Remove "college" variations
+    name = re.sub(r'\s+college$', '', name)
+    name = re.sub(r'\s+coll$', '', name)
+    
+    # Remove "of" phrases that vary
+    name = re.sub(r'\s+of\s+london$', '', name)
+    name = re.sub(r'\s+london$', '', name)
+    
+    # Remove common trailing words
+    name = re.sub(r'\s+bristol$', '', name)
+    
+    # Normalize whitespace
+    name = ' '.join(name.split())
+    
+    return name.strip()
+
+
+def match_university_to_ukprn(extracted_name: str) -> Tuple[Optional[str], str]:
+    """
+    Match an extracted university name to UKPRN from HESA provider list.
+    
+    Returns:
+        (ukprn, official_name) or (None, extracted_name)
+    """
+    if not extracted_name:
+        return None, extracted_name
+    
+    providers = load_hesa_providers()
+    name_to_ukprn = providers['name_to_ukprn']
+    ukprn_to_name = providers['ukprn_to_name']
+    
+    # Manual aliases for common variations
+    aliases = {
+        'uwe bristol': '10007164',  # University of the West of England, Bristol
+        'uwe': '10007164',
+        'royal holloway': '10005553',  # Royal Holloway and Bedford New College
+        'royal holloway univ': '10005553',
+        'royal holloway univ of': '10005553',
+        'royal holloway university': '10005553',
+        'royal holloway university of': '10005553',
+        'royal holloway and bedford': '10005553',
+    }
+    
+    # Check aliases first
+    normalized = normalize_name_for_matching(extracted_name)
+    if normalized in aliases:
+        ukprn = aliases[normalized]
+        return ukprn, ukprn_to_name[ukprn]
+    
+    # Try exact match
+    if normalized in name_to_ukprn:
+        ukprn = name_to_ukprn[normalized]
+        return ukprn, ukprn_to_name[ukprn]
+    
+    # Try fuzzy matching - check if extracted name contains any provider name
+    for hesa_name, ukprn in name_to_ukprn.items():
+        if hesa_name in normalized or normalized in hesa_name:
+            return ukprn, ukprn_to_name[ukprn]
+    
+    # Try word-based matching for partial matches
+    extracted_words = set(normalized.split())
+    best_match = None
+    best_score = 0
+    
+    for hesa_name, ukprn in name_to_ukprn.items():
+        hesa_words = set(hesa_name.split())
+        common_words = extracted_words & hesa_words
+        
+        # Score based on overlap
+        if len(common_words) >= 2:  # At least 2 words in common
+            score = len(common_words) / max(len(extracted_words), len(hesa_words))
+            if score > best_score:
+                best_score = score
+                best_match = ukprn
+    
+    if best_match and best_score > 0.5:  # 50% word overlap
+        return best_match, ukprn_to_name[best_match]
+    
+    # No match found
+    logging.debug(f"No UKPRN match found for: {extracted_name}")
+    return None, extracted_name
+
+
+# =============================================================================
 # CSV Tracking System
 # =============================================================================
+
+def canonicalize_university_name(name: str) -> str:
+    """
+    Convert university name to canonical form.
+    
+    Removes document-specific suffixes like "Infographic", "Annual-Report", etc.
+    Standardizes spacing and capitalization.
+    """
+    # Remove file extensions first
+    name = Path(name).stem if '.' in name else name
+    
+    # Replace underscores with spaces
+    name = name.replace('_', ' ')
+    
+    # Remove common document-type suffixes
+    doc_suffixes = [
+        'Infographic', 'Annual Report', 'Annual-Report', 'Financial Statements',
+        'Financial-Statements', 'Accounts', 'Report', 'Document', 'FS',
+        'Final', 'Draft', 'Consolidated', 'Statement', 'Summary'
+    ]
+    
+    for suffix in doc_suffixes:
+        # Remove suffix if it appears at the end (case-insensitive)
+        if name.lower().endswith(suffix.lower()):
+            name = name[:-(len(suffix))].strip()
+        # Remove if appears after a space or hyphen
+        pattern = rf'\s+{re.escape(suffix)}\b'
+        name = re.sub(pattern, '', name, flags=re.IGNORECASE)
+        pattern = rf'-{re.escape(suffix)}\b'
+        name = re.sub(pattern, '', name, flags=re.IGNORECASE)
+    
+    # Remove year patterns from the name
+    # This catches cases like "University Name 2023-24"
+    name = re.sub(r'\s*\d{4}[-_]?\d{0,4}\s*$', '', name)
+    name = re.sub(r'\s*\d{4}\s*$', '', name)
+    
+    # Clean up extra whitespace
+    name = ' '.join(name.split())
+    
+    # Remove trailing/leading punctuation
+    name = name.strip('-_.,;: ')
+    
+    # Standardize common abbreviations
+    name = name.replace('Univ ', 'University ')
+    name = name.replace('Coll ', 'College ')
+    
+    return name.strip()
+
+
+def normalize_year_to_ending(year_str: str) -> str:
+    """
+    Normalize year to ending year format.
+    
+    Examples:
+        "2023-24" -> "2024"
+        "2023-2024" -> "2024"
+        "2023" -> "2024" (assumes financial year ending in 2024)
+        "202324" -> "2024"
+    
+    Returns the ending year as a 4-digit string.
+    """
+    if not year_str:
+        return ""
+    
+    # Handle range formats: 2023-24, 2023-2024, 2023_24
+    range_match = re.match(r'(\d{4})[-_](\d{2,4})', year_str)
+    if range_match:
+        start_year = range_match.group(1)
+        end_part = range_match.group(2)
+        
+        if len(end_part) == 2:
+            # 2023-24 format
+            end_year = start_year[:2] + end_part
+        else:
+            # 2023-2024 format
+            end_year = end_part
+        
+        return end_year
+    
+    # Single year: assume it's the starting year, add 1 for ending year
+    single_match = re.match(r'(\d{4})$', year_str)
+    if single_match:
+        start_year = int(single_match.group(1))
+        # Financial year starting 2023 ends in 2024
+        return str(start_year + 1)
+    
+    # If we can't parse it, return as-is
+    logging.warning(f"Could not normalize year: {year_str}")
+    return year_str
+
+
+def get_file_download_timestamp(file_path: Path) -> str:
+    """
+    Get the download timestamp for a file.
+    
+    Tries (in order):
+    1. File modification time (mtime)
+    2. File creation time (ctime/birthtime)
+    
+    Returns ISO format timestamp or empty string.
+    """
+    if not file_path.exists():
+        return ""
+    
+    try:
+        # Use modification time as best proxy for download time
+        mtime = file_path.stat().st_mtime
+        timestamp = datetime.fromtimestamp(mtime)
+        return timestamp.isoformat()
+    except Exception as e:
+        logging.debug(f"Could not get timestamp for {file_path}: {e}")
+        return ""
+
+
+def extract_source_url_from_logs(pdf_filename: str, downloads_dir: Path = None) -> str:
+    """
+    Extract source URL for a PDF from download logs.
+    
+    Searches through log files in logs/ directory for download records.
+    Looks for "Attempting direct download:" lines followed by the PDF filename.
+    """
+    logs_dir = Path('logs')
+    if not logs_dir.exists():
+        return ""
+    
+    # Search in download log files
+    log_patterns = [
+        'download_financials_*.log',
+        'coordinator_*.log'
+    ]
+    
+    pdf_name = Path(pdf_filename).name
+    
+    for pattern in log_patterns:
+        for log_file in sorted(logs_dir.glob(pattern), reverse=True):
+            try:
+                with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    lines = f.readlines()
+                    
+                    # Look for lines mentioning this PDF
+                    for i, line in enumerate(lines):
+                        if pdf_name in line or pdf_filename in line:
+                            # Look backwards for the most recent "Attempting direct download:" line
+                            for j in range(i-1, max(0, i-10), -1):
+                                if 'Attempting direct download:' in lines[j]:
+                                    # Extract URL from this line
+                                    url_match = re.search(r'https?://[^\s<>"\']+', lines[j])
+                                    if url_match:
+                                        url = url_match.group(0)
+                                        # Filter out localhost and common non-source URLs
+                                        if 'localhost' not in url and 'duckduckgo' not in url:
+                                            return url.rstrip('.,;)')
+                                    break
+            except Exception as e:
+                logging.debug(f"Error reading log file {log_file}: {e}")
+                continue
+    
+    return ""
+
 
 def load_csv_tracker(csv_path: Path) -> List[Dict]:
     """
@@ -95,19 +523,32 @@ def load_csv_tracker(csv_path: Path) -> List[Dict]:
 
 def save_csv_tracker(csv_path: Path, rows: List[Dict]) -> None:
     """
-    Save the CSV tracking file.
+    Save the CSV tracking file with relative paths.
     
-    Columns: id, university, year, source_url, pdf_path, txt_path, json_path
+    Columns: id, ukprn, university, year, source_url, download_timestamp, pdf_path, txt_path, json_path
+    Paths are stored as relative to project root (e.g., 'downloads/pdfs/file.pdf')
     """
     # Ensure directory exists
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     
-    fieldnames = ['id', 'university', 'year', 'source_url', 'pdf_path', 'txt_path', 'json_path']
+    fieldnames = ['id', 'ukprn', 'university', 'year', 'source_url', 'download_timestamp', 'pdf_path', 'txt_path', 'json_path']
+    
+    # Convert absolute paths to relative before saving
+    rows_to_save = []
+    for row in rows:
+        row_copy = row.copy()
+        if row_copy.get('pdf_path'):
+            row_copy['pdf_path'] = to_relative_path(row_copy['pdf_path'])
+        if row_copy.get('txt_path'):
+            row_copy['txt_path'] = to_relative_path(row_copy['txt_path'])
+        if row_copy.get('json_path'):
+            row_copy['json_path'] = to_relative_path(row_copy['json_path'])
+        rows_to_save.append(row_copy)
     
     with open(csv_path, 'w', encoding='utf-8', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows(rows_to_save)
     
     logging.info(f"Saved {len(rows)} rows to CSV tracker: {csv_path}")
 
@@ -121,40 +562,64 @@ def get_next_id(rows: List[Dict]) -> int:
     return max_id + 1
 
 
-def find_csv_row(rows: List[Dict], university: str, year: str, pdf_path: str = None) -> Optional[Dict]:
+def find_csv_row(rows: List[Dict], university: str, year: str, pdf_path: str = None, ukprn: str = None) -> Optional[Dict]:
     """
-    Find a row matching university, year, and optionally pdf_path.
+    Find a row matching university/UKPRN, year, and optionally pdf_path.
     
+    Prefers matching by UKPRN if provided, falls back to university name.
     Returns the matching row or None.
     """
     for row in rows:
-        if row['university'] == university and row['year'] == year:
-            # If pdf_path specified, must match too
+        # Match by UKPRN if available
+        if ukprn and row.get('ukprn') == ukprn and row['year'] == year:
+            if pdf_path is None or row.get('pdf_path', '') == pdf_path:
+                return row
+        # Fall back to name matching
+        elif not ukprn and row['university'] == university and row['year'] == year:
             if pdf_path is None or row.get('pdf_path', '') == pdf_path:
                 return row
     return None
 
 
-def add_placeholder_rows(rows: List[Dict], university: str, years: List[str]) -> List[Dict]:
+def add_placeholder_rows(rows: List[Dict], university: str, years: List[str], ukprn: str = None) -> List[Dict]:
     """
     Add placeholder rows for missing university/year combinations.
     
     Only adds if the combination doesn't already exist.
+    Uses UKPRN for identification when available.
     """
+    # Get UKPRN and official name if not provided
+    if not ukprn:
+        ukprn, official_name = match_university_to_ukprn(university)
+        if not ukprn:
+            # Fall back to canonical name if no UKPRN match
+            official_name = canonicalize_university_name(university)
+    else:
+        providers = load_hesa_providers()
+        official_name = providers['ukprn_to_name'].get(ukprn, university)
+    
     next_id = get_next_id(rows)
     added_count = 0
     
     for year in years:
-        # Check if any row exists for this uni/year combo
-        existing = [r for r in rows if r['university'] == university and r['year'] == year]
+        # Normalize year to ending year format
+        normalized_year = normalize_year_to_ending(year)
+        
+        # Check if any row exists for this UKPRN/year combo
+        if ukprn:
+            existing = [r for r in rows if r.get('ukprn') == ukprn and r['year'] == normalized_year]
+        else:
+            existing = [r for r in rows if r['university'] == official_name and r['year'] == normalized_year]
         
         if not existing:
             # Add placeholder row
             rows.append({
                 'id': str(next_id),
-                'university': university,
-                'year': year,
+                'ukprn': ukprn or '',
+                'university': official_name,
+                'year': normalized_year,
                 'source_url': '',
+                'download_timestamp': '',
                 'pdf_path': '',
                 'txt_path': '',
                 'json_path': ''
@@ -163,7 +628,7 @@ def add_placeholder_rows(rows: List[Dict], university: str, years: List[str]) ->
             added_count += 1
     
     if added_count > 0:
-        logging.debug(f"Added {added_count} placeholder rows for {university}")
+        logging.debug(f"Added {added_count} placeholder rows for {official_name}")
     
     return rows
 
@@ -173,6 +638,7 @@ def update_csv_with_extracted_files(rows: List[Dict], extracted_dir: Path) -> Li
     Scan extracted_text directory and update CSV with found files.
     
     Adds rows for any university/year combinations found in extracted files.
+    Uses UKPRN for identification and official HESA names.
     """
     txt_files = list(extracted_dir.glob("*.txt"))
     json_files = list(extracted_dir.glob("*.json"))
@@ -181,15 +647,19 @@ def update_csv_with_extracted_files(rows: List[Dict], extracted_dir: Path) -> Li
     
     # Process txt files
     for txt_file in txt_files:
-        uni_name = extract_university_name(txt_file.name)
-        year = extract_year_from_filename(txt_file.name)
+        uni_name_raw = extract_university_name(txt_file.name)
+        year_raw = extract_year_from_filename(txt_file.name)
         
-        if not uni_name or not year:
+        if not uni_name_raw or not year_raw:
             continue
+        
+        # Match to UKPRN and get official name
+        ukprn, official_name = match_university_to_ukprn(uni_name_raw)
+        year = normalize_year_to_ending(year_raw)
         
         # Check for invalid years
         try:
-            year_int = int(year.split('-')[0])
+            year_int = int(year)
             if year_int < 1990 or year_int > 2100:
                 continue
         except (ValueError, IndexError):
@@ -201,36 +671,57 @@ def update_csv_with_extracted_files(rows: List[Dict], extracted_dir: Path) -> Li
         
         # Try to find matching PDF (look in all downloads_* directories)
         pdf_path = ''
+        pdf_file_obj = None
         pdf_search_name = txt_file.stem  # Filename without .txt
         for downloads_dir in Path('.').glob('downloads_*'):
             possible_pdf = downloads_dir / f"{pdf_search_name}.pdf"
             if possible_pdf.exists():
                 pdf_path = str(possible_pdf.absolute())
+                pdf_file_obj = possible_pdf
                 break
         
-        # Check if row already exists for this file
+        # Extract metadata
+        source_url = extract_source_url_from_logs(f"{pdf_search_name}.pdf") if pdf_file_obj else ''
+        download_timestamp = get_file_download_timestamp(pdf_file_obj) if pdf_file_obj else ''
+        
+        # Check if row already exists for this file (match by UKPRN if available)
         existing_row = None
         for row in rows:
-            if (row['university'] == uni_name and 
-                row['year'] == year and 
-                row.get('txt_path', '') == str(txt_file.absolute())):
-                existing_row = row
-                break
+            # Match by UKPRN if available
+            if ukprn and row.get('ukprn') == ukprn and row['year'] == year:
+                if row.get('txt_path', '') == str(txt_file.absolute()):
+                    existing_row = row
+                    break
+            # Fall back to name matching
+            elif not ukprn and row['university'] == official_name and row['year'] == year:
+                if row.get('txt_path', '') == str(txt_file.absolute()):
+                    existing_row = row
+                    break
         
         if existing_row:
-            # Update existing row
+            # Update existing row with metadata and UKPRN
+            if ukprn and not existing_row.get('ukprn'):
+                existing_row['ukprn'] = ukprn
+            if official_name:
+                existing_row['university'] = official_name
             existing_row['txt_path'] = str(txt_file.absolute())
             existing_row['json_path'] = json_path
             if pdf_path and not existing_row.get('pdf_path'):
                 existing_row['pdf_path'] = pdf_path
+            if source_url and not existing_row.get('source_url'):
+                existing_row['source_url'] = source_url
+            if download_timestamp and not existing_row.get('download_timestamp'):
+                existing_row['download_timestamp'] = download_timestamp
         else:
             # Create new row
             next_id = get_next_id(rows)
             rows.append({
                 'id': str(next_id),
-                'university': uni_name,
+                'ukprn': ukprn or '',
+                'university': official_name,
                 'year': year,
-                'source_url': '',  # Unknown for existing files
+                'source_url': source_url,
+                'download_timestamp': download_timestamp,
                 'pdf_path': pdf_path,
                 'txt_path': str(txt_file.absolute()),
                 'json_path': json_path
@@ -244,25 +735,38 @@ def update_csv_with_downloads(rows: List[Dict], downloads_dir: Path) -> List[Dic
     Scan downloads directory and update CSV with downloaded PDFs.
     
     Updates pdf_path for existing rows or creates new rows.
+    Uses UKPRN for identification and official HESA names.
+    Extracts source URLs and download timestamps.
     """
     pdf_files = list(downloads_dir.glob("*.pdf"))
     
     logging.info(f"Updating CSV with {len(pdf_files)} downloaded PDF files")
     
     for pdf_file in pdf_files:
-        uni_name = extract_university_name(pdf_file.name)
-        year = extract_year_from_filename(pdf_file.name)
+        uni_name_raw = extract_university_name(pdf_file.name)
+        year_raw = extract_year_from_filename(pdf_file.name)
         
-        if not uni_name or not year:
+        if not uni_name_raw or not year_raw:
+            continue
+        
+        # Match to UKPRN and get official name
+        ukprn, official_name = match_university_to_ukprn(uni_name_raw)
+        year = normalize_year_to_ending(year_raw)
+        
+        if not official_name or not year:
             continue
         
         # Check for invalid years
         try:
-            year_int = int(year.split('-')[0])
+            year_int = int(year)
             if year_int < 1990 or year_int > 2100:
                 continue
         except (ValueError, IndexError):
             continue
+        
+        # Extract metadata
+        source_url = extract_source_url_from_logs(pdf_file.name)
+        download_timestamp = get_file_download_timestamp(pdf_file)
         
         # Look for corresponding txt/json files
         txt_file = Path('extracted_text') / f"{pdf_file.stem}.txt"
@@ -271,37 +775,48 @@ def update_csv_with_downloads(rows: List[Dict], downloads_dir: Path) -> List[Dic
         txt_path = str(txt_file.absolute()) if txt_file.exists() else ''
         json_path = str(json_file.absolute()) if json_file.exists() else ''
         
-        # Find or create row
+        # Find or create row (match by UKPRN if available)
         existing_row = None
         for row in rows:
-            if (row['university'] == uni_name and 
-                row['year'] == year and 
-                not row.get('pdf_path')):  # Empty pdf_path (placeholder or incomplete)
+            # Match by UKPRN if available
+            if ukprn and row.get('ukprn') == ukprn and row['year'] == year and not row.get('pdf_path'):
+                existing_row = row
+                break
+            # Fall back to name matching
+            elif not ukprn and row['university'] == official_name and row['year'] == year and not row.get('pdf_path'):
                 existing_row = row
                 break
         
         if existing_row:
-            # Update placeholder row
+            # Update placeholder row with all metadata and UKPRN
+            if ukprn and not existing_row.get('ukprn'):
+                existing_row['ukprn'] = ukprn
+            if official_name:
+                existing_row['university'] = official_name
             existing_row['pdf_path'] = str(pdf_file.absolute())
             existing_row['txt_path'] = txt_path
             existing_row['json_path'] = json_path
+            existing_row['source_url'] = source_url
+            existing_row['download_timestamp'] = download_timestamp
         else:
-            # Check if row exists with this exact PDF
+            # Check if row exists with this exact PDF (match by UKPRN if available)
             pdf_exists = any(
-                row['university'] == uni_name and 
+                (row.get('ukprn') == ukprn if ukprn else row['university'] == official_name) and 
                 row['year'] == year and 
                 row.get('pdf_path') == str(pdf_file.absolute())
                 for row in rows
             )
             
             if not pdf_exists:
-                # Create new row
+                # Create new row with all metadata
                 next_id = get_next_id(rows)
                 rows.append({
                     'id': str(next_id),
-                    'university': uni_name,
+                    'ukprn': ukprn or '',
+                    'university': official_name,
                     'year': year,
-                    'source_url': '',  # Will be filled later if available
+                    'source_url': source_url,
+                    'download_timestamp': download_timestamp,
                     'pdf_path': str(pdf_file.absolute()),
                     'txt_path': txt_path,
                     'json_path': json_path
@@ -457,8 +972,12 @@ def analyze_extracted_text(extracted_dir: Path) -> Dict[str, Dict[str, any]]:
     """
     Analyze extracted text directory to find available years per university.
     
+    Uses UKPRN for identification and official HESA names for consistency.
+    
     Returns:
-        Dict mapping university name to:
+        Dict mapping UKPRN (or university name if no UKPRN) to:
+            - 'ukprn': UKPRN identifier (if matched)
+            - 'name': Official university name
             - 'years': Set of available years
             - 'min_year': Earliest year found
             - 'max_year': Latest year found
@@ -471,6 +990,8 @@ def analyze_extracted_text(extracted_dir: Path) -> Dict[str, Dict[str, any]]:
     logging.info(f"Analyzing extracted text in: {extracted_dir}")
     
     university_data = defaultdict(lambda: {
+        'ukprn': '',
+        'name': '',
         'years': set(),
         'files': [],
         'min_year': None,
@@ -484,15 +1005,18 @@ def analyze_extracted_text(extracted_dir: Path) -> Dict[str, Dict[str, any]]:
     for txt_file in txt_files:
         filename = txt_file.name
         
-        # Extract university name
-        uni_name = extract_university_name(filename)
-        if not uni_name:
+        # Extract university name and match to UKPRN
+        uni_name_raw = extract_university_name(filename)
+        if not uni_name_raw:
             continue
         
-        # Extract year
+        ukprn, official_name = match_university_to_ukprn(uni_name_raw)
+        
+        # Extract year and normalize
         year = extract_year_from_filename(filename)
         if not year:
             continue
+        year = normalize_year_to_ending(year)
         
         # Filter out invalid years (should be 1990-2100)
         try:
@@ -502,12 +1026,17 @@ def analyze_extracted_text(extracted_dir: Path) -> Dict[str, Dict[str, any]]:
         except (ValueError, IndexError):
             continue
         
+        # Use UKPRN as key if available, otherwise use name
+        key = ukprn if ukprn else official_name
+        
         # Store data
-        university_data[uni_name]['years'].add(year)
-        university_data[uni_name]['files'].append(filename)
+        university_data[key]['ukprn'] = ukprn or ''
+        university_data[key]['name'] = official_name
+        university_data[key]['years'].add(year)
+        university_data[key]['files'].append(filename)
     
     # Calculate min/max years for each university
-    for uni_name, data in university_data.items():
+    for key, data in university_data.items():
         years = sorted(data['years'])
         if years:
             data['min_year'] = years[0]
@@ -788,15 +1317,189 @@ def print_summary(university_data: Dict, missing_data: Dict):
     if missing_data:
         print(colored_text(f"\nUniversities with gaps: {len(missing_data)}", Fore.YELLOW))
         
-        # Show top 10 with most gaps
+        # Show top 10 with most gaps (display names, not UKPRNs)
         top_gaps = sorted(missing_data.items(), key=lambda x: len(x[1]), reverse=True)[:10]
         print("\nTop 10 universities with most missing years:")
-        for uni_name, years in top_gaps:
-            print(f"  {uni_name}: {len(years)} missing years")
+        for uni_key, years in top_gaps:
+            # Get university name from university_data if available
+            uni_info = university_data.get(uni_key, {})
+            if isinstance(uni_info, dict) and uni_info.get('name'):
+                display_name = uni_info['name']
+                if uni_info.get('ukprn'):
+                    display_name += f" (UKPRN: {uni_info['ukprn']})"
+            else:
+                display_name = uni_key
+            
+            print(f"  {display_name}: {len(years)} missing years")
             if len(years) <= 5:
                 print(f"    Missing: {', '.join(years)}")
     
     print(colored_text("\n" + "="*80, Fore.CYAN))
+
+
+def print_university_summary(
+    university_data: Dict,
+    missing_data: Dict,
+    csv_rows: List[Dict] = None,
+    show_all: bool = False,
+    limit: int = 20
+):
+    """
+    Print detailed summary for each university showing found and missing years.
+    
+    Args:
+        university_data: Dict of university data from analyze_extracted_text (keyed by UKPRN or name)
+        missing_data: Dict of missing years from identify_missing_years
+        csv_rows: Optional CSV tracker rows for additional info
+        show_all: If True, show all universities. If False, show only those with data
+        limit: Maximum number of universities to show (default: 20)
+    """
+    print(colored_text("\n" + "="*80, Fore.CYAN))
+    print(colored_text("University-by-University Summary", Fore.CYAN))
+    print(colored_text("="*80, Fore.CYAN))
+    
+    # Get all universities (from both data and missing)
+    all_unis = set(university_data.keys()) | set(missing_data.keys())
+    
+    if not all_unis:
+        print(colored_text("\nNo university data available.", Fore.YELLOW))
+        return
+    
+    # Sort by university name (get name from university_data if available)
+    def sort_key(key):
+        uni_info = university_data.get(key, {})
+        return uni_info.get('name', key) if isinstance(uni_info, dict) else key
+    
+    sorted_unis = sorted(all_unis, key=sort_key)
+    
+    # Limit output if requested
+    if not show_all and len(sorted_unis) > limit:
+        print(f"\nShowing first {limit} universities (use --show-all-unis for complete list)")
+        sorted_unis = sorted_unis[:limit]
+    
+    print(f"\nTotal universities: {len(all_unis)}\n")
+    
+    for idx, uni_key in enumerate(sorted_unis, 1):
+        # Get data for this university
+        uni_data = university_data.get(uni_key, {})
+        missing_years = missing_data.get(uni_key, [])
+        
+        # Display name with UKPRN if available
+        ukprn = uni_data.get('ukprn', '') if isinstance(uni_data, dict) else ''
+        uni_name = uni_data.get('name', uni_key) if isinstance(uni_data, dict) else uni_key
+        
+        if ukprn:
+            display_name = f"{uni_name} (UKPRN: {ukprn})"
+        else:
+            display_name = uni_name
+        
+        print(colored_text(f"\n{idx}. {display_name}", Fore.CYAN))
+        print("-" * 70)
+        
+        # Found years
+        if uni_data and uni_data.get('years'):
+            years_list = sorted(list(uni_data['years']))
+            year_ranges = format_year_ranges(years_list)
+            
+            print(colored_text(f"  ✓ Found: {len(years_list)} years", Fore.GREEN))
+            print(f"    Range: {uni_data.get('min_year', 'N/A')} to {uni_data.get('max_year', 'N/A')}")
+            print(f"    Years: {year_ranges}")
+            print(f"    Files: {len(uni_data.get('files', []))} documents")
+            
+            # Count from CSV if available
+            if csv_rows:
+                csv_count = sum(1 for row in csv_rows 
+                              if row['university'] == uni_name and row.get('txt_path'))
+                if csv_count != len(uni_data.get('files', [])):
+                    print(f"    CSV records: {csv_count} documents")
+        else:
+            print(colored_text("  ✗ No documents found yet", Fore.YELLOW))
+        
+        # Missing years
+        if missing_years:
+            # Group consecutive years
+            missing_ranges = format_year_ranges(missing_years)
+            print(colored_text(f"  ⚠ Missing: {len(missing_years)} years", Fore.YELLOW))
+            print(f"    Years: {missing_ranges}")
+            
+            # Show placeholders in CSV if available
+            if csv_rows:
+                placeholder_count = sum(1 for row in csv_rows 
+                                       if row['university'] == uni_name 
+                                       and row['year'] in missing_years
+                                       and not row.get('pdf_path'))
+                if placeholder_count > 0:
+                    print(f"    CSV placeholders: {placeholder_count} rows")
+        else:
+            if uni_data and uni_data.get('years'):
+                print(colored_text("  ✓ No missing years in range", Fore.GREEN))
+    
+    print(colored_text("\n" + "="*80, Fore.CYAN))
+
+
+def format_year_ranges(years: List[str]) -> str:
+    """
+    Format a list of years into readable ranges.
+    
+    Examples:
+        ['2020-21', '2021-22', '2022-23'] -> '2020-21 to 2022-23'
+        ['2020', '2021', '2022'] -> '2020 to 2022'
+        ['2020-21', '2023-24'] -> '2020-21, 2023-24'
+    """
+    if not years:
+        return "None"
+    
+    if len(years) <= 5:
+        return ', '.join(years)
+    
+    # Extract start years for grouping
+    year_ints = []
+    for y in years:
+        try:
+            if '-' in y:
+                year_ints.append(int(y.split('-')[0]))
+            else:
+                year_ints.append(int(y))
+        except (ValueError, IndexError):
+            continue
+    
+    if not year_ints:
+        return ', '.join(years)
+    
+    year_ints.sort()
+    
+    # Find consecutive ranges
+    ranges = []
+    start = year_ints[0]
+    end = year_ints[0]
+    
+    for year in year_ints[1:]:
+        if year == end + 1:
+            end = year
+        else:
+            # Add completed range
+            if start == end:
+                ranges.append(str(start))
+            else:
+                ranges.append(f"{start}-{end}")
+            start = end = year
+    
+    # Add final range
+    if start == end:
+        ranges.append(str(start))
+    else:
+        ranges.append(f"{start}-{end}")
+    
+    # Format nicely
+    if len(ranges) == 1:
+        r = ranges[0]
+        if '-' in r and len(r.split('-')) == 2:
+            return f"{r} ({len(years)} years)"
+        return r
+    elif len(ranges) <= 3:
+        return ', '.join(ranges) + f" ({len(years)} years)"
+    else:
+        return f"{ranges[0]} to {ranges[-1]} ({len(years)} years, {len(ranges)} ranges)"
 
 
 def main():
@@ -823,15 +1526,15 @@ Examples:
     parser.add_argument(
         '--extracted',
         type=Path,
-        default=Path('extracted_text'),
-        help='Directory containing extracted text files'
+        default=None,
+        help='Directory containing extracted text files (default: iCloud/unimetrics/extracted_text)'
     )
     
     parser.add_argument(
         '--downloads',
         type=Path,
         default=None,
-        help='Directory for downloading new PDFs (default: downloads_YYYYMMDD_HHMMSS)'
+        help='Directory for downloading new PDFs (default: iCloud/unimetrics/downloads/pdfs)'
     )
     
     parser.add_argument(
@@ -862,6 +1565,18 @@ Examples:
     )
     
     parser.add_argument(
+        '--summary',
+        action='store_true',
+        help='Show detailed university-by-university summary and exit'
+    )
+    
+    parser.add_argument(
+        '--show-all-unis',
+        action='store_true',
+        help='Show all universities in summary (not just first 20)'
+    )
+    
+    parser.add_argument(
         '-v', '--verbose',
         action='store_true',
         help='Enable verbose logging'
@@ -877,21 +1592,25 @@ Examples:
     print(colored_text("Financial Data Collection Coordinator", Fore.CYAN))
     print(colored_text("="*80 + "\n", Fore.CYAN))
     
-    # Set downloads directory with timestamp if not specified
+    # Set directories - use iCloud storage by default
     if args.downloads is None:
-        args.downloads = Path(f'downloads_coordinator_{datetime.now().strftime("%Y%m%d_%H%M%S")}')
+        args.downloads = get_downloads_dir()
+    if args.extracted is None:
+        args.extracted = get_extracted_text_dir()
     
-    # Create output directory
+    # Ensure directories exist
     args.downloads.mkdir(parents=True, exist_ok=True)
+    args.extracted.mkdir(parents=True, exist_ok=True)
+    
     logging.info(f"Downloads directory: {args.downloads}")
     logging.info(f"Extracted text directory: {args.extracted}")
     
-    # CSV tracker setup
+    # CSV tracker setup (stays in project directory for git tracking)
     csv_tracker_path = Path('financial_data_tracker.csv')
     logging.info(f"CSV tracker: {csv_tracker_path}")
     
-    # Track progress across iterations
-    progress_file = Path(f'coordinator_progress_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json')
+    # Track progress across iterations (in logs directory)
+    progress_file = Path(f'logs/coordinator_progress_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json')
     
     # Step 0: Load and initialize CSV tracker
     logging.info("\nStep 0: Loading CSV tracker...")
@@ -934,6 +1653,18 @@ Examples:
     
     # Step 3: Print initial summary
     print_summary(university_data, missing_data)
+    
+    # If --summary flag is set, show detailed per-university summary and exit
+    if args.summary:
+        print_university_summary(
+            university_data,
+            missing_data,
+            csv_rows=csv_rows,
+            show_all=args.show_all_unis,
+            limit=20
+        )
+        print(colored_text(f"\n📊 CSV Tracker: {csv_tracker_path} ({len(csv_rows)} rows)", Fore.CYAN))
+        return
     
     # Step 4: Save initial progress
     save_progress(progress_file, university_data, missing_data, 0)
@@ -1024,12 +1755,22 @@ Examples:
     missing_data = identify_missing_years(university_data, max_lookback=args.max_lookback, max_forward=2)
     print_summary(university_data, missing_data)
     
+    # Show detailed university summary
+    print_university_summary(
+        university_data,
+        missing_data,
+        csv_rows=csv_rows,
+        show_all=False,
+        limit=10
+    )
+    
     # Final CSV update
     logging.info("\nFinal CSV tracker update...")
     csv_rows = update_csv_with_extracted_files(csv_rows, args.extracted)
     save_csv_tracker(csv_tracker_path, csv_rows)
     
     print(colored_text(f"\n📊 CSV Tracker: {csv_tracker_path} ({len(csv_rows)} rows)", Fore.GREEN))
+    print(colored_text(f"💡 Tip: Run with --summary to see detailed breakdown for all universities", Fore.CYAN))
     
     logging.info(f"\nProgress saved to: {progress_file}")
     print(colored_text("\nDone!", Fore.GREEN))

@@ -11,21 +11,25 @@ __pycache__/
 *.so
 .Python
 
-# Log files
+# Log files - ALWAYS EXCLUDE (not portable, regenerated)
 *.log
 university_financials_*.log
 download_financials_*.log
 logs/
 
-# Downloads
+# OLD local data directories (data now in iCloud)
+downloads/
 downloads_*/
+extracted_text/
+
+# Progress tracking files in root (moved to logs/)
+coordinator_progress_*.json
 
 # Distribution / packaging
 .Python
 build/
 develop-eggs/
 dist/
-downloads/
 eggs/
 .eggs/
 lib/
@@ -94,16 +98,30 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-# Downloaded PDFs or data files (if any)
-*.pdf
-data/
-downloads/
+# =============================================================================
+# Data Storage - ALL IN iCLOUD
+# =============================================================================
 
-# Extracted text files
+# CSV tracker - INCLUDE (uses iCloud-relative paths, portable)
+# financial_data_tracker.csv - INCLUDED IN GIT
+
+# ALL data files are stored in iCloud Drive at:
+# ~/Library/Mobile Documents/com~apple~CloudDocs/Nexus/Resources/Reference Data/unimetrics/
+# This keeps the git repo small (<5MB) while data is synced via iCloud (3.3GB)
+
+# Local data directories (if they exist) - EXCLUDE
+downloads/
+downloads_*/
 extracted_text/
 
-# CSV tracker (contains local file paths)
-financial_data_tracker.csv
+# Backup and temporary files
+*_backup.csv
+*_icloud_backup.csv
+*.bak
+
+# Temporary test directories
+test_downloads/
+test_output/
 
 # Temporary files
 *.tmp
