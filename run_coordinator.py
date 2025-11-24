@@ -108,16 +108,23 @@ def get_project_root() -> Path:
 def to_relative_path(abs_path: str | Path) -> str:
     """
     Convert absolute path to path relative to iCloud base directory.
+    If path is already relative, return as-is.
     Returns empty string if path is None or empty.
     
     Examples:
         /Users/justin/Library/.../unimetrics/downloads/pdfs/file.pdf -> downloads/pdfs/file.pdf
         /Users/justin/Library/.../unimetrics/extracted_text/file.txt -> extracted_text/file.txt
+        downloads/pdfs/file.pdf -> downloads/pdfs/file.pdf (already relative)
     """
     if not abs_path:
         return ""
     
     abs_path = Path(abs_path)
+    
+    # If already relative, return as-is
+    if not abs_path.is_absolute():
+        return str(abs_path)
+    
     icloud_base = get_icloud_base_path()
     
     try:
@@ -125,7 +132,7 @@ def to_relative_path(abs_path: str | Path) -> str:
         rel_path = abs_path.relative_to(icloud_base)
         return str(rel_path)
     except ValueError:
-        # Path is not relative to iCloud base, return as-is
+        # Path is absolute but not within iCloud base
         logging.warning(f"Path {abs_path} is not within iCloud base {icloud_base}")
         return str(abs_path)
 
