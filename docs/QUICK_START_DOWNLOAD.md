@@ -15,12 +15,12 @@ playwright install chromium
 
 **Test with 5 universities:**
 ```bash
-python download_financial_documents.py --test 5
+python step1_download_pdfs.py --test 5
 ```
 
 **Download everything:**
 ```bash
-python download_financial_documents.py
+python step1_download_pdfs.py
 ```
 
 ## 📊 What You'll Get
@@ -39,25 +39,25 @@ The script automatically:
 
 ### Full Download (All Universities)
 ```bash
-python download_financial_documents.py -v
+python step1_download_pdfs.py -v
 ```
 Expected: 30-60 minutes, 500+ documents
 
 ### Test Mode (Try First)
 ```bash
-python download_financial_documents.py --test 10 -v
+python step1_download_pdfs.py --test 10 -v
 ```
 Expected: 5-10 minutes, ~50-100 documents
 
 ### Requests Only (Fastest)
 ```bash
-python download_financial_documents.py --no-playwright
+python step1_download_pdfs.py --no-playwright
 ```
 Expected: 10-20 minutes, may miss some files
 
 ### With Manual Intervention
 ```bash
-python download_financial_documents.py --visible-browser
+python step1_download_pdfs.py --visible-browser
 ```
 Use this if sites have CAPTCHAs or security checks
 
@@ -106,7 +106,7 @@ playwright install chromium
 
 ### Permission denied
 ```bash
-chmod +x download_financial_documents.py
+chmod +x step1_download_pdfs.py
 ```
 
 ### Module not found

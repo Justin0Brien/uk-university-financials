@@ -16,7 +16,7 @@ Searches DuckDuckGo to find financial statement pages and documents for 180+ UK 
 - `university_financials_TIMESTAMP.log` - Detailed search logs
 
 ### Stage 2: Download Financial Documents
-**Script:** `download_financial_documents.py`
+**Script:** `step1_download_pdfs.py`
 
 Downloads actual PDFs/documents using multiple fallback strategies and intelligent page scraping.
 
@@ -46,7 +46,7 @@ python university_financials.py -v
 ### Step 2: Download Documents (30-60 minutes)
 
 ```bash
-python download_financial_documents.py -v
+python step1_download_pdfs.py -v
 ```
 
 **What happens:**
@@ -68,7 +68,7 @@ Test the complete pipeline with 5 universities:
 ```bash
 # Stage 1: Search (already done - CSV exists)
 # Stage 2: Download
-python download_financial_documents.py --test 5 -v
+python step1_download_pdfs.py --test 5 -v
 ```
 
 ## 📊 Data Flow
@@ -80,7 +80,7 @@ university_financials.py
         ↓
 university_financials_results_*.csv
         ↓
-download_financial_documents.py
+step1_download_pdfs.py
         ↓
 [Try direct download → headless browser → visible browser]
         ↓
@@ -151,12 +151,12 @@ python university_financials.py -v      # Verbose debugging
 
 ### Download Script Options
 ```bash
-python download_financial_documents.py                    # Full download
-python download_financial_documents.py -v                 # Verbose mode
-python download_financial_documents.py --test 10          # Test with 10
-python download_financial_documents.py --no-scrape        # Skip scraping
-python download_financial_documents.py --no-playwright    # Requests only
-python download_financial_documents.py --visible-browser  # Manual mode
+python step1_download_pdfs.py                    # Full download
+python step1_download_pdfs.py -v                 # Verbose mode
+python step1_download_pdfs.py --test 10          # Test with 10
+python step1_download_pdfs.py --no-scrape        # Skip scraping
+python step1_download_pdfs.py --no-playwright    # Requests only
+python step1_download_pdfs.py --visible-browser  # Manual mode
 ```
 
 ## 📁 Output Organization
@@ -164,7 +164,7 @@ python download_financial_documents.py --visible-browser  # Manual mode
 ```
 University Financials/
 ├── university_financials.py              # Stage 1: Search
-├── download_financial_documents.py       # Stage 2: Download
+├── step1_download_pdfs.py       # Stage 2: Download
 │
 ├── Data Files
 │   ├── university_financials_results_20251122_170252.csv
@@ -190,7 +190,7 @@ To refresh with latest financial statements:
 python university_financials.py -v
 
 # 2. Download any new documents
-python download_financial_documents.py -v
+python step1_download_pdfs.py -v
 ```
 
 The download script automatically:
@@ -249,13 +249,13 @@ python university_financials.py -v  # See retry attempts
 ### Stage 2 Issues (Download)
 ```bash
 # If downloads failing
-python download_financial_documents.py --visible-browser  # Manual mode
+python step1_download_pdfs.py --visible-browser  # Manual mode
 
 # If playwright issues
 playwright install chromium
 
 # If memory issues
-python download_financial_documents.py --test 50  # Download in batches
+python step1_download_pdfs.py --test 50  # Download in batches
 ```
 
 ## 📚 Documentation

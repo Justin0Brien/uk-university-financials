@@ -55,7 +55,7 @@ This downloads the Chromium browser used for automated downloads.
 Download all financial documents:
 
 ```bash
-python download_financial_documents.py
+python step1_download_pdfs.py
 ```
 
 ### With Verbose Logging
@@ -63,7 +63,7 @@ python download_financial_documents.py
 See detailed information about each download attempt:
 
 ```bash
-python download_financial_documents.py -v
+python step1_download_pdfs.py -v
 ```
 
 ### Test Mode
@@ -71,7 +71,7 @@ python download_financial_documents.py -v
 Process only the first 10 documents (useful for testing):
 
 ```bash
-python download_financial_documents.py --test 10
+python step1_download_pdfs.py --test 10
 ```
 
 ### Disable Page Scraping
@@ -79,7 +79,7 @@ python download_financial_documents.py --test 10
 Only download the specific URLs in CSV files (don't scrape pages for additional documents):
 
 ```bash
-python download_financial_documents.py --no-scrape
+python step1_download_pdfs.py --no-scrape
 ```
 
 ### Requests Only Mode
@@ -87,7 +87,7 @@ python download_financial_documents.py --no-scrape
 Only use direct download method (faster but may miss some files):
 
 ```bash
-python download_financial_documents.py --no-playwright
+python step1_download_pdfs.py --no-playwright
 ```
 
 ### Visible Browser Mode
@@ -95,13 +95,13 @@ python download_financial_documents.py --no-playwright
 Use a visible browser window (allows you to manually solve CAPTCHAs or security checks):
 
 ```bash
-python download_financial_documents.py --visible-browser
+python step1_download_pdfs.py --visible-browser
 ```
 
 ### Combined Options
 
 ```bash
-python download_financial_documents.py -v --test 5 --visible-browser
+python step1_download_pdfs.py -v --test 5 --visible-browser
 ```
 
 ## How It Works

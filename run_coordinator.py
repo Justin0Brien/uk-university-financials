@@ -390,7 +390,7 @@ def run_download_script(
     try:
         cmd = [
             sys.executable,
-            'download_financial_documents.py',
+            'step1_download_pdfs.py',
             '--search', search_query,
             '--output', str(output_dir),
             '--limit', str(limit),
@@ -445,7 +445,7 @@ def run_extraction_script(
     try:
         cmd = [
             sys.executable,
-            'extract_pdf_text.py',
+            'step2_extract_text.py',
             str(input_dir),
             '--output', str(output_dir),
             '--workers', str(workers),

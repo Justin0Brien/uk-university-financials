@@ -10,7 +10,7 @@ Automated system for collecting, extracting, and managing UK university financia
 source venv/bin/activate
 
 # 2. Run coordinator to collect missing financial data
-python financial_data_coordinator.py --unis-per-iteration 10
+python run_coordinator.py --unis-per-iteration 10
 
 # 3. Check extracted_text/ for results (.txt and .json files)
 ls -la extracted_text/ | head -20
@@ -20,9 +20,9 @@ ls -la extracted_text/ | head -20
 
 The system consists of three main components:
 
-1. **`financial_data_coordinator.py`** - Main orchestrator (use this!)
-2. **`download_financial_documents.py`** - Downloads PDFs from university websites
-3. **`extract_pdf_text.py`** - Extracts text from PDFs with multi-column support
+1. **`run_coordinator.py`** - 🎯 **MAIN SCRIPT** - Orchestrates the entire workflow (use this!)
+2. **`step1_download_pdfs.py`** - Downloads PDFs from university websites (called by coordinator)
+3. **`step2_extract_text.py`** - Extracts text from PDFs with multi-column support (called by coordinator)
 
 The coordinator automatically manages the entire workflow: analyzing what data you have, identifying missing years, downloading new documents, and extracting their content.
 
@@ -32,19 +32,19 @@ The coordinator is your primary interface. It handles everything automatically:
 
 ```bash
 # Basic usage - process 5 universities (default)
-python financial_data_coordinator.py
+python run_coordinator.py
 
 # Process more universities per run
-python financial_data_coordinator.py --unis-per-iteration 10
+python run_coordinator.py --unis-per-iteration 10
 
 # Preview what would be searched (no downloads)
-python financial_data_coordinator.py --dry-run
+python run_coordinator.py --dry-run
 
 # Look further back in time (default: 5 years back, 2 forward)
-python financial_data_coordinator.py --max-lookback 10
+python run_coordinator.py --max-lookback 10
 
 # Verbose output for debugging
-python financial_data_coordinator.py -v
+python run_coordinator.py -v
 ```
 
 ### What the Coordinator Does
@@ -69,9 +69,10 @@ The coordinator uses a batch approach:
 ```
 University Financials/
 ├── README.md                          # This file
-├── financial_data_coordinator.py      # Main coordinator script
-├── download_financial_documents.py    # Document downloader
-├── extract_pdf_text.py                # PDF text extractor
+├── run_coordinator.py                 # 🎯 MAIN SCRIPT - Run this!
+├── step1_download_pdfs.py             # PDF downloader (used by coordinator)
+├── step2_extract_text.py              # Text extractor (used by coordinator)
+├── legacy_url_finder.py               # Old URL finder script (not used)
 ├── gemini_list.csv                    # University list
 ├── requirements.txt                   # Python dependencies
 ├── docs/                              # Additional documentation
@@ -160,9 +161,9 @@ Structured format with metadata:
 
 ```bash
 # Run multiple times to process different batches
-python financial_data_coordinator.py --unis-per-iteration 10  # Batch 1
-python financial_data_coordinator.py --unis-per-iteration 10  # Batch 2
-python financial_data_coordinator.py --unis-per-iteration 10  # Batch 3
+python run_coordinator.py --unis-per-iteration 10  # Batch 1
+python run_coordinator.py --unis-per-iteration 10  # Batch 2
+python run_coordinator.py --unis-per-iteration 10  # Batch 3
 
 # The system automatically:
 # - Skips already-extracted files
@@ -177,7 +178,7 @@ python financial_data_coordinator.py --unis-per-iteration 10  # Batch 3
 ls -la extracted_text/ | wc -l
 
 # Run dry-run to see what's missing
-python financial_data_coordinator.py --dry-run
+python run_coordinator.py --dry-run
 
 # Check the summary in the output
 ```
@@ -188,10 +189,10 @@ If you need more control:
 
 ```bash
 # 1. Download from specific search
-python download_financial_documents.py --search "University of Cambridge 2023 annual report" --output downloads_manual --limit 5
+python step1_download_pdfs.py --search "University of Cambridge 2023 annual report" --output downloads_manual --limit 5
 
 # 2. Extract from downloaded PDFs
-python extract_pdf_text.py downloads_manual -o extracted_text --fast --workers 4 --format both
+python step2_extract_text.py downloads_manual -o extracted_text --fast --workers 4 --format both
 ```
 
 ## ⚡ Performance
@@ -221,7 +222,7 @@ For more detailed information, see the `docs/` folder:
 ls downloads_coordinator_*/
 
 # Try manual search first
-python download_financial_documents.py --search "University Name" --output test_download --limit 3
+python step1_download_pdfs.py --search "University Name" --output test_download --limit 3
 ```
 
 ### Extraction errors
@@ -230,7 +231,7 @@ python download_financial_documents.py --search "University Name" --output test_
 tail -f logs/extract_text_*.log
 
 # Try single file
-python extract_pdf_text.py test_file.pdf -o test_output --fast
+python step2_extract_text.py test_file.pdf -o test_output --fast
 ```
 
 ### Google search blocked
@@ -245,7 +246,7 @@ The system automatically skips files that have been extracted. To force reproces
 rm extracted_text/University_Name_2023*
 
 # Then re-run extraction
-python extract_pdf_text.py downloads_dir -o extracted_text --fast --workers 4
+python step2_extract_text.py downloads_dir -o extracted_text --fast --workers 4
 ```
 
 ## 🛡️ Git Configuration

@@ -6,7 +6,7 @@ This system intelligently collects, extracts, and manages UK university financia
 
 ## Components
 
-### 1. `download_financial_documents.py` - Document Downloader
+### 1. `step1_download_pdfs.py` - Document Downloader
 Downloads PDF financial documents from university websites.
 
 **New Features:**
@@ -18,16 +18,16 @@ Downloads PDF financial documents from university websites.
 **Usage Examples:**
 ```bash
 # Search for specific university/year
-python download_financial_documents.py --search "University of Edinburgh 2020-21 annual report" --output downloads_temp --limit 5
+python step1_download_pdfs.py --search "University of Edinburgh 2020-21 annual report" --output downloads_temp --limit 5
 
 # Normal mode with CSV files
-python download_financial_documents.py --no-scrape
+python step1_download_pdfs.py --no-scrape
 
 # Test mode
-python download_financial_documents.py --test 10
+python step1_download_pdfs.py --test 10
 ```
 
-### 2. `extract_pdf_text.py` - Text Extractor
+### 2. `step2_extract_text.py` - Text Extractor
 Extracts structured text from PDF documents with resume capability.
 
 **Key Features:**
@@ -40,14 +40,14 @@ Extracts structured text from PDF documents with resume capability.
 **Usage Examples:**
 ```bash
 # Process new PDFs (automatically skips existing)
-python extract_pdf_text.py downloads_20251122_224411 -o extracted_text --fast --workers 4
+python step2_extract_text.py downloads_20251122_224411 -o extracted_text --fast --workers 4
 
 # Force reprocess (delete existing txt/json files first)
 rm extracted_text/University_Name_2023*.txt
-python extract_pdf_text.py downloads_20251122_224411 -o extracted_text --fast --workers 4
+python step2_extract_text.py downloads_20251122_224411 -o extracted_text --fast --workers 4
 ```
 
-### 3. `financial_data_coordinator.py` - Intelligent Coordinator (NEW)
+### 3. `run_coordinator.py` - Intelligent Coordinator (NEW)
 Orchestrates the entire collection process to fill data gaps in a single efficient pass.
 
 **What It Does:**
@@ -68,22 +68,22 @@ Orchestrates the entire collection process to fill data gaps in a single efficie
 **Usage Examples:**
 ```bash
 # Run with defaults (processes 5 universities, searches 3 years each)
-python financial_data_coordinator.py
+python run_coordinator.py
 
 # Dry run to see what would be searched
-python financial_data_coordinator.py --dry-run
+python run_coordinator.py --dry-run
 
 # Process more universities
-python financial_data_coordinator.py --unis-per-iteration 10
+python run_coordinator.py --unis-per-iteration 10
 
 # Use specific directories
-python financial_data_coordinator.py --extracted extracted_text --downloads downloads_custom
+python run_coordinator.py --extracted extracted_text --downloads downloads_custom
 
 # Look further back in time
-python financial_data_coordinator.py --max-lookback 30
+python run_coordinator.py --max-lookback 30
 
 # Verbose output for debugging
-python financial_data_coordinator.py -v
+python run_coordinator.py -v
 ```
 
 ## Complete Workflow
@@ -91,16 +91,16 @@ python financial_data_coordinator.py -v
 ### Initial Setup
 ```bash
 # 1. Download initial batch of documents
-python download_financial_documents.py
+python step1_download_pdfs.py
 
 # 2. Extract text from all PDFs
-python extract_pdf_text.py downloads_20251122_224411 -o extracted_text --fast --workers 4
+python step2_extract_text.py downloads_20251122_224411 -o extracted_text --fast --workers 4
 ```
 
 ### Iterative Gap Filling
 ```bash
 # 3. Run coordinator to find and fill gaps (single pass)
-python financial_data_coordinator.py --unis-per-iteration 10
+python run_coordinator.py --unis-per-iteration 10
 
 # The coordinator will:
 # - Analyze what you have
@@ -117,10 +117,10 @@ python financial_data_coordinator.py --unis-per-iteration 10
 # Each run creates a new timestamped download directory
 
 # First run: process 5 universities
-python financial_data_coordinator.py --unis-per-iteration 5
+python run_coordinator.py --unis-per-iteration 5
 
 # Second run: process next 10 universities  
-python financial_data_coordinator.py --unis-per-iteration 10
+python run_coordinator.py --unis-per-iteration 10
 
 # The extraction script automatically skips already-processed files
 # Downloads are organized in timestamped directories for easy tracking
@@ -214,9 +214,9 @@ Google search has rate limits:
 
 ```
 University Financials/
-├── download_financial_documents.py   # Downloader
-├── extract_pdf_text.py               # Text extractor
-├── financial_data_coordinator.py     # Coordinator (NEW)
+├── step1_download_pdfs.py   # Downloader
+├── step2_extract_text.py               # Text extractor
+├── run_coordinator.py     # Coordinator (NEW)
 ├── gemini_list.csv                   # University list
 ├── downloads_YYYYMMDD_HHMMSS/        # Initial downloads
 │   └── *.pdf
@@ -237,13 +237,13 @@ University Financials/
 ### "No extracted text found"
 ```bash
 # Make sure extraction ran first
-python extract_pdf_text.py downloads_DIR -o extracted_text --fast --workers 4
+python step2_extract_text.py downloads_DIR -o extracted_text --fast --workers 4
 ```
 
 ### "Warnings still appearing"
 The stderr suppression should eliminate pdfminer warnings. If you still see them:
 ```bash
-python extract_pdf_text.py downloads_DIR -o extracted_text --fast --workers 4 2>/dev/null
+python step2_extract_text.py downloads_DIR -o extracted_text --fast --workers 4 2>/dev/null
 ```
 
 ### "Search not finding documents"

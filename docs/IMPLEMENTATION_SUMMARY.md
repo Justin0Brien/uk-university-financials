@@ -2,7 +2,7 @@
 
 ## What Was Created
 
-### New Script: `financial_data_coordinator.py`
+### New Script: `run_coordinator.py`
 A comprehensive coordinator that intelligently fills gaps in university financial data by:
 - Analyzing existing extracted text files
 - Identifying missing financial years
@@ -21,7 +21,7 @@ A comprehensive coordinator that intelligently fills gaps in university financia
 
 ## Updated Scripts
 
-### `download_financial_documents.py`
+### `step1_download_pdfs.py`
 **New Features Added:**
 1. `search_for_documents()` - Google search integration for targeted queries
 2. `--search QUERY` - Command-line argument for custom searches
@@ -35,7 +35,7 @@ A comprehensive coordinator that intelligently fills gaps in university financia
 - Enhanced argument parsing with new flags
 - Maintained backward compatibility with existing CSV-based workflow
 
-### `extract_pdf_text.py`
+### `step2_extract_text.py`
 **New Features Added:**
 1. **Resume Capability** - `is_already_processed()` function checks for existing output files
 2. **Smart Skipping** - Filters PDF list before processing to skip completed files
@@ -179,17 +179,17 @@ A comprehensive coordinator that intelligently fills gaps in university financia
 ## Files Modified/Created
 
 ### Created:
-- `financial_data_coordinator.py` (600 lines)
+- `run_coordinator.py` (600 lines)
 - `README_COORDINATOR.md` (comprehensive documentation)
 - `IMPLEMENTATION_SUMMARY.md` (this file)
 
 ### Modified:
-- `download_financial_documents.py` (+150 lines)
+- `step1_download_pdfs.py` (+150 lines)
   - Added search_for_documents()
   - Added command-line arguments
   - Modified main() signature
   
-- `extract_pdf_text.py` (+100 lines)
+- `step2_extract_text.py` (+100 lines)
   - Added is_already_processed()
   - Added suppress_stderr() context manager
   - Enhanced warning suppression

@@ -4,13 +4,13 @@
 
 ```bash
 # 1. Download initial documents (2-3 hours)
-python download_financial_documents.py
+python step1_download_pdfs.py
 
 # 2. Extract text from PDFs (2-3 hours with fast mode)
-python extract_pdf_text.py downloads_YYYYMMDD_HHMMSS -o extracted_text --fast --workers 4
+python step2_extract_text.py downloads_YYYYMMDD_HHMMSS -o extracted_text --fast --workers 4
 
 # 3. Start coordinator to fill gaps (runs iteratively)
-python financial_data_coordinator.py --max-iterations 5
+python run_coordinator.py --max-iterations 5
 ```
 
 ## 🔄 Daily Operations
@@ -18,7 +18,7 @@ python financial_data_coordinator.py --max-iterations 5
 ### Check What You Have
 ```bash
 # Dry run to see gaps
-python financial_data_coordinator.py --dry-run
+python run_coordinator.py --dry-run
 
 # Check progress files
 cat coordinator_progress_*.json | jq '.universities | length'
@@ -27,7 +27,7 @@ cat coordinator_progress_*.json | jq '.universities | length'
 ### Continue Collection
 ```bash
 # Resume coordinator (automatically skips processed files)
-python financial_data_coordinator.py --max-iterations 10
+python run_coordinator.py --max-iterations 10
 
 # If interrupted, just run again - it resumes automatically
 ```
@@ -35,14 +35,14 @@ python financial_data_coordinator.py --max-iterations 10
 ### Process New Downloads
 ```bash
 # Extract text from new PDFs (skips existing automatically)
-python extract_pdf_text.py downloads_NEW -o extracted_text --fast --workers 4
+python step2_extract_text.py downloads_NEW -o extracted_text --fast --workers 4
 ```
 
 ## 📊 Common Tasks
 
 ### Search for Specific University/Year
 ```bash
-python download_financial_documents.py \
+python step1_download_pdfs.py \
   --search "University of Cambridge 2019-20 annual report" \
   --output downloads_temp \
   --limit 5
@@ -50,7 +50,7 @@ python download_financial_documents.py \
 
 ### Extract Single PDF
 ```bash
-python extract_pdf_text.py downloads_temp -o extracted_text --fast --limit 1
+python step2_extract_text.py downloads_temp -o extracted_text --fast --limit 1
 ```
 
 ### Force Reprocess PDFs
@@ -60,7 +60,7 @@ rm extracted_text/University_Name_2023*.txt
 rm extracted_text/University_Name_2023*.json
 
 # Run extraction again
-python extract_pdf_text.py downloads_DIR -o extracted_text --fast --workers 4
+python step2_extract_text.py downloads_DIR -o extracted_text --fast --workers 4
 ```
 
 ### Check Logs
@@ -77,7 +77,7 @@ tail -f logs/extract_text_$(ls -t logs/extract_text_*.log | head -1 | xargs base
 ### "No documents found"
 ```bash
 # Check if search works
-python download_financial_documents.py \
+python step1_download_pdfs.py \
   --search "University test" \
   --limit 1 \
   -v
@@ -95,13 +95,13 @@ rm downloads_DIR/problematic_file.pdf
 ### "Too many warnings"
 ```bash
 # Redirect stderr to null
-python extract_pdf_text.py downloads_DIR -o extracted_text --fast --workers 4 2>/dev/null
+python step2_extract_text.py downloads_DIR -o extracted_text --fast --workers 4 2>/dev/null
 ```
 
 ### "Google blocking searches"
 ```bash
 # Wait 30 minutes, then:
-python financial_data_coordinator.py --unis-per-iteration 2 --max-iterations 5
+python run_coordinator.py --unis-per-iteration 2 --max-iterations 5
 ```
 
 ## 📈 Monitor Progress
@@ -121,7 +121,7 @@ ls extracted_text/*.txt | cut -d_ -f1 | sort -u | wc -l
 ### Check Coverage
 ```bash
 # Run analyzer
-python financial_data_coordinator.py --dry-run --max-iterations 1
+python run_coordinator.py --dry-run --max-iterations 1
 
 # View progress JSON
 cat coordinator_progress_*.json | jq '.universities | length'
@@ -133,25 +133,25 @@ cat coordinator_progress_*.json | jq '.missing_data | length'
 ### Fast Machine
 ```bash
 # Use more workers
-python extract_pdf_text.py downloads_DIR -o extracted_text --fast --workers 8
+python step2_extract_text.py downloads_DIR -o extracted_text --fast --workers 8
 
 # Process more unis per iteration
-python financial_data_coordinator.py --unis-per-iteration 10
+python run_coordinator.py --unis-per-iteration 10
 ```
 
 ### Slow Machine
 ```bash
 # Use fewer workers
-python extract_pdf_text.py downloads_DIR -o extracted_text --fast --workers 2
+python step2_extract_text.py downloads_DIR -o extracted_text --fast --workers 2
 
 # Process fewer unis
-python financial_data_coordinator.py --unis-per-iteration 3
+python run_coordinator.py --unis-per-iteration 3
 ```
 
 ### Rate Limiting
 ```bash
 # Slow down coordinator
-python financial_data_coordinator.py \
+python run_coordinator.py \
   --unis-per-iteration 2 \
   --max-iterations 3
   
@@ -164,25 +164,25 @@ python financial_data_coordinator.py \
 ### Week 1: Initial Collection
 ```bash
 # Monday: Download from CSV
-python download_financial_documents.py
+python step1_download_pdfs.py
 
 # Tuesday: Extract all (while monitoring)
-python extract_pdf_text.py downloads_* -o extracted_text --fast --workers 4
+python step2_extract_text.py downloads_* -o extracted_text --fast --workers 4
 
 # Wednesday: Start coordinator (5 iterations)
-python financial_data_coordinator.py --max-iterations 5
+python run_coordinator.py --max-iterations 5
 
 # Thursday: Continue coordinator
-python financial_data_coordinator.py --max-iterations 5
+python run_coordinator.py --max-iterations 5
 
 # Friday: Review progress, identify gaps
-python financial_data_coordinator.py --dry-run
+python run_coordinator.py --dry-run
 ```
 
 ### Week 2+: Gap Filling
 ```bash
 # Run daily (spread load across days)
-python financial_data_coordinator.py --max-iterations 3 --unis-per-iteration 3
+python run_coordinator.py --max-iterations 3 --unis-per-iteration 3
 ```
 
 ## 📝 Best Practices
@@ -224,19 +224,19 @@ rm extracted_text/*.json
 ```bash
 # Using screen
 screen -S coordinator
-python financial_data_coordinator.py --max-iterations 10
+python run_coordinator.py --max-iterations 10
 # Ctrl+A, D to detach
 # screen -r coordinator to reattach
 
 # Using nohup
-nohup python financial_data_coordinator.py --max-iterations 10 &
+nohup python run_coordinator.py --max-iterations 10 &
 tail -f nohup.out
 ```
 
 ### Process Specific Universities
 ```bash
 # Extract only specific uni
-find downloads_* -name "Cambridge*.pdf" -exec python extract_pdf_text.py {} -o extracted_text --fast \;
+find downloads_* -name "Cambridge*.pdf" -exec python step2_extract_text.py {} -o extracted_text --fast \;
 ```
 
 ### Parallel Extractions
@@ -244,7 +244,7 @@ find downloads_* -name "Cambridge*.pdf" -exec python extract_pdf_text.py {} -o e
 # Split into batches
 ls downloads_*/*.pdf | split -l 200 - batch_
 for batch in batch_*; do
-  python extract_pdf_text.py $(head -1 $batch | xargs dirname) -o extracted_text --fast --workers 4 &
+  python step2_extract_text.py $(head -1 $batch | xargs dirname) -o extracted_text --fast --workers 4 &
 done
 wait
 ```
