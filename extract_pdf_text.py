@@ -28,7 +28,10 @@ import json
 import logging
 import multiprocessing as mp
 import os
+import signal
 import sys
+import warnings
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -88,6 +91,24 @@ def setup_logging(verbose: bool = False) -> None:
     root_logger.addHandler(file_handler)
     root_logger.addHandler(console_handler)
     
+    # Suppress noisy pdfminer warnings about malformed PDFs
+    # These warnings (invalid float values, color issues) don't affect extraction
+    # but can significantly slow down processing
+    
+    # Disable pdfminer logging entirely - warnings cause severe performance degradation
+    for logger_name in ['pdfminer', 'pdfminer.pdfinterp', 'pdfminer.pdfdocument', 
+                        'pdfminer.pdfpage', 'pdfminer.converter']:
+        logger = logging.getLogger(logger_name)
+        logger.setLevel(logging.CRITICAL)  # Only show critical errors
+        logger.propagate = False  # Don't propagate to root logger
+        # Remove all handlers to prevent stderr output
+        logger.handlers = []
+    
+    # Also suppress at the warnings module level
+    warnings.filterwarnings('ignore', category=UserWarning, module='pdfminer')
+    warnings.filterwarnings('ignore', message='.*Cannot set.*color.*')
+    warnings.filterwarnings('ignore', message='.*invalid float value.*')
+    
     logging.info(f"Logging initialized. Log file: {log_file}")
 
 
@@ -98,7 +119,47 @@ def colored_text(text: str, color: str) -> str:
     return text
 
 
-def extract_text_from_pdf(pdf_path: Path, extract_tables: bool = True, fast_mode: bool = False) -> Dict:
+def is_already_processed(pdf_path: Path, output_dir: Path, format: str) -> bool:
+    """Check if a PDF has already been processed by looking for output files."""
+    base_name = pdf_path.stem
+    
+    if format == 'txt':
+        return (output_dir / f"{base_name}.txt").exists()
+    elif format == 'json':
+        return (output_dir / f"{base_name}.json").exists()
+    elif format == 'both':
+        # Both files must exist
+        return ((output_dir / f"{base_name}.txt").exists() and 
+                (output_dir / f"{base_name}.json").exists())
+    return False
+
+
+@contextmanager
+def suppress_stderr():
+    """Suppress stderr output from pdfminer warnings."""
+    # Save original stderr
+    original_stderr = sys.stderr
+    try:
+        # Redirect stderr to devnull
+        sys.stderr = open(os.devnull, 'w')
+        yield
+    finally:
+        # Restore stderr
+        sys.stderr.close()
+        sys.stderr = original_stderr
+
+
+class TimeoutException(Exception):
+    """Exception raised when PDF processing times out."""
+    pass
+
+
+def timeout_handler(signum, frame):
+    """Signal handler for timeout."""
+    raise TimeoutException("PDF processing timed out")
+
+
+def extract_text_from_pdf(pdf_path: Path, extract_tables: bool = True, fast_mode: bool = False, timeout: int = 300) -> Dict:
     """
     Extract text from a PDF file with multi-column layout support.
     
@@ -106,6 +167,7 @@ def extract_text_from_pdf(pdf_path: Path, extract_tables: bool = True, fast_mode
         pdf_path: Path to the PDF file
         extract_tables: Whether to also extract tables
         fast_mode: Use faster but less precise extraction (good for slow machines)
+        timeout: Maximum time in seconds to spend on one PDF (default: 300s/5min)
         
     Returns:
         Dictionary containing extracted text and metadata
@@ -119,68 +181,82 @@ def extract_text_from_pdf(pdf_path: Path, extract_tables: bool = True, fast_mode
         'error': None
     }
     
+    # Set timeout for problematic PDFs (Unix-like systems only)
+    if hasattr(signal, 'SIGALRM'):
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(timeout)
+    
     try:
-        with pdfplumber.open(pdf_path) as pdf:
-            result['total_pages'] = len(pdf.pages)
-            result['metadata'] = pdf.metadata or {}
-            
-            logging.debug(f"Processing {len(pdf.pages)} pages from {pdf_path.name}")
-            
-            for page_num, page in enumerate(pdf.pages, 1):
-                page_data = {
-                    'page_number': page_num,
-                    'text': '',
-                    'tables': [],
-                    'width': page.width,
-                    'height': page.height
-                }
+        # Suppress stderr warnings from pdfminer about malformed PDFs
+        with suppress_stderr():
+            with pdfplumber.open(pdf_path) as pdf:
+                result['total_pages'] = len(pdf.pages)
+                result['metadata'] = pdf.metadata or {}
                 
-                # Extract text - pdfplumber handles multi-column layouts well
-                # by default, processing left-to-right, top-to-bottom
-                # Fast mode disables layout analysis for 5-10x speed improvement
-                try:
-                    if fast_mode:
-                        text = page.extract_text(layout=False)
-                    else:
-                        text = page.extract_text(layout=True, x_tolerance=3, y_tolerance=3)
-                    if text:
-                        page_data['text'] = text.strip()
-                        logging.debug(f"Page {page_num}: Extracted {len(text)} characters")
-                    else:
-                        logging.debug(f"Page {page_num}: No text extracted")
-                except Exception as e:
-                    logging.warning(f"Page {page_num}: Text extraction error: {e}")
+                logging.debug(f"Processing {len(pdf.pages)} pages from {pdf_path.name}")
                 
-                # Extract tables if requested
-                if extract_tables:
+                for page_num, page in enumerate(pdf.pages, 1):
+                    page_data = {
+                        'page_number': page_num,
+                        'text': '',
+                        'tables': [],
+                        'width': page.width,
+                        'height': page.height
+                    }
+                    
+                    # Extract text - pdfplumber handles multi-column layouts well
+                    # by default, processing left-to-right, top-to-bottom
+                    # Fast mode disables layout analysis for 5-10x speed improvement
                     try:
-                        tables = page.extract_tables()
-                        if tables:
-                            # Convert tables to list of lists and clean
-                            for table_idx, table in enumerate(tables):
-                                cleaned_table = []
-                                for row in table:
-                                    cleaned_row = [
-                                        cell.strip() if cell else '' 
-                                        for cell in row
-                                    ]
-                                    if any(cleaned_row):  # Skip empty rows
-                                        cleaned_table.append(cleaned_row)
-                                
-                                if cleaned_table:
-                                    page_data['tables'].append(cleaned_table)
-                            
-                            logging.debug(f"Page {page_num}: Extracted {len(tables)} tables")
+                        if fast_mode:
+                            text = page.extract_text(layout=False)
+                        else:
+                            text = page.extract_text(layout=True, x_tolerance=3, y_tolerance=3)
+                        if text:
+                            page_data['text'] = text.strip()
+                            logging.debug(f"Page {page_num}: Extracted {len(text)} characters")
+                        else:
+                            logging.debug(f"Page {page_num}: No text extracted")
                     except Exception as e:
-                        logging.warning(f"Page {page_num}: Table extraction error: {e}")
+                        logging.warning(f"Page {page_num}: Text extraction error: {e}")
+                    
+                    # Extract tables if requested
+                    if extract_tables:
+                        try:
+                            tables = page.extract_tables()
+                            if tables:
+                                # Convert tables to list of lists and clean
+                                for table_idx, table in enumerate(tables):
+                                    cleaned_table = []
+                                    for row in table:
+                                        cleaned_row = [
+                                            cell.strip() if cell else '' 
+                                            for cell in row
+                                        ]
+                                        if any(cleaned_row):  # Skip empty rows
+                                            cleaned_table.append(cleaned_row)
+                                    
+                                    if cleaned_table:
+                                        page_data['tables'].append(cleaned_table)
+                                
+                                logging.debug(f"Page {page_num}: Extracted {len(tables)} tables")
+                        except Exception as e:
+                            logging.warning(f"Page {page_num}: Table extraction error: {e}")
+                    
+                    result['pages'].append(page_data)
                 
-                result['pages'].append(page_data)
-            
-            result['success'] = True
-            
+                result['success'] = True
+    
+    except TimeoutException:
+        result['error'] = f"Processing timed out after {timeout} seconds (likely corrupted PDF)"
+        logging.error(f"Timeout processing {pdf_path.name} after {timeout}s - skipping")
     except Exception as e:
         result['error'] = str(e)
         logging.error(f"Failed to process {pdf_path.name}: {e}")
+    finally:
+        # Cancel the alarm
+        if hasattr(signal, 'SIGALRM'):
+            signal.alarm(0)
     
     return result
 
@@ -269,20 +345,20 @@ def find_pdf_files(input_dir: Path, recursive: bool = True) -> List[Path]:
     return sorted(pdf_files)
 
 
-def process_single_pdf(args: Tuple[Path, Path, bool, str, bool, bool]) -> Tuple[bool, Dict]:
+def process_single_pdf(args: Tuple[Path, Path, bool, str, bool, bool, int]) -> Tuple[bool, Dict]:
     """
     Process a single PDF file (worker function for multiprocessing).
     
     Args:
-        args: Tuple of (pdf_path, output_dir, extract_tables, format, verbose, fast_mode)
+        args: Tuple of (pdf_path, output_dir, extract_tables, format, verbose, fast_mode, timeout)
         
     Returns:
         Tuple of (success, result_dict)
     """
-    pdf_path, output_dir, extract_tables, format, verbose, fast_mode = args
+    pdf_path, output_dir, extract_tables, format, verbose, fast_mode, timeout = args
     
-    # Extract text
-    result = extract_text_from_pdf(pdf_path, extract_tables=extract_tables, fast_mode=fast_mode)
+    # Extract text with timeout
+    result = extract_text_from_pdf(pdf_path, extract_tables=extract_tables, fast_mode=fast_mode, timeout=timeout)
     
     if result['success']:
         # Save extracted text
@@ -316,7 +392,8 @@ def process_pdfs(
     limit: Optional[int] = None,
     verbose: bool = False,
     fast_mode: bool = False,
-    workers: int = 1
+    workers: int = 1,
+    timeout: int = 300
 ) -> Dict:
     """
     Process all PDF files in a directory.
@@ -331,6 +408,7 @@ def process_pdfs(
         verbose: Enable verbose logging
         fast_mode: Use faster but less precise extraction (5-10x speedup)
         workers: Number of parallel worker processes (1=sequential, >1=parallel)
+        timeout: Maximum time in seconds per PDF (default: 300s/5min)
         
     Returns:
         Dictionary with processing statistics
@@ -355,15 +433,38 @@ def process_pdfs(
         pdf_files = pdf_files[:limit]
         logging.info(f"Limiting to {limit} files for testing")
     
+    # Filter out already-processed PDFs (for resume capability)
+    initial_count = len(pdf_files)
+    pdf_files = [pdf for pdf in pdf_files if not is_already_processed(pdf, output_dir, format)]
+    skipped_count = initial_count - len(pdf_files)
+    
+    if skipped_count > 0:
+        logging.info(colored_text(
+            f"Skipping {skipped_count} already-processed files", 
+            Fore.YELLOW
+        ))
+    
+    if not pdf_files:
+        logging.info("All files already processed!")
+        return {
+            'total_files': initial_count,
+            'successful': skipped_count,
+            'failed': 0,
+            'total_pages': 0,
+            'failed_files': [],
+            'skipped': skipped_count
+        }
+    
     logging.info(f"Found {len(pdf_files)} PDF files to process")
     
     # Statistics
     stats = {
-        'total_files': len(pdf_files),
-        'successful': 0,
+        'total_files': initial_count,
+        'successful': skipped_count,  # Count already-processed as successful
         'failed': 0,
         'total_pages': 0,
-        'failed_files': []
+        'failed_files': [],
+        'skipped': skipped_count
     }
     
     # Use parallel processing if workers > 1
@@ -372,7 +473,7 @@ def process_pdfs(
         
         # Prepare arguments for worker processes
         worker_args = [
-            (pdf_path, output_dir, extract_tables, format, verbose, fast_mode)
+            (pdf_path, output_dir, extract_tables, format, verbose, fast_mode, timeout)
             for pdf_path in pdf_files
         ]
         
@@ -414,7 +515,7 @@ def process_pdfs(
                 logging.info(f"Processing {pdf_path.name}")
             
             # Extract text
-            result = extract_text_from_pdf(pdf_path, extract_tables=extract_tables, fast_mode=fast_mode)
+            result = extract_text_from_pdf(pdf_path, extract_tables=extract_tables, fast_mode=fast_mode, timeout=timeout)
             
             if result['success']:
                 # Save extracted text
@@ -591,7 +692,8 @@ Performance tips:
         limit=args.limit,
         verbose=args.verbose,
         fast_mode=args.fast,
-        workers=args.workers
+        workers=args.workers,
+        timeout=300  # 5 minute timeout per PDF
     )
     
     # Print summary
@@ -599,7 +701,9 @@ Performance tips:
     print(colored_text("Extraction Summary", Fore.CYAN))
     print(colored_text("=" * 80, Fore.CYAN))
     print(f"Total PDF files: {stats['total_files']}")
-    print(colored_text(f"Successfully processed: {stats['successful']}", Fore.GREEN))
+    if stats.get('skipped', 0) > 0:
+        print(colored_text(f"Skipped (already processed): {stats['skipped']}", Fore.YELLOW))
+    print(colored_text(f"Newly processed: {stats['successful'] - stats.get('skipped', 0)}", Fore.GREEN))
     print(colored_text(f"Failed: {stats['failed']}", Fore.RED if stats['failed'] > 0 else Fore.GREEN))
     print(f"Total pages extracted: {stats['total_pages']}")
     

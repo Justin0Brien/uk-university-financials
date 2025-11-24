@@ -117,6 +117,79 @@ class FinancialDocument:
             return f"{safe_uni}{year_part}.pdf"
 
 
+def search_for_documents(query: str, max_results: int = 10) -> List[FinancialDocument]:
+    """
+    Search for financial documents using Google search.
+    
+    Parameters
+    ----------
+    query : str
+        Search query (e.g., "University of Edinburgh 2020-21 annual report")
+    max_results : int
+        Maximum number of results to return
+        
+    Returns
+    -------
+    List[FinancialDocument]
+        List of documents found matching the query
+    """
+    if not _HAVE_REQUESTS:
+        logger.warning("Requests library not available for searching")
+        return []
+    
+    documents = []
+    
+    try:
+        # Use Google search (simple scraping approach)
+        # Note: For production, consider using official Google Custom Search API
+        search_url = "https://www.google.com/search"
+        params = {
+            'q': query + ' filetype:pdf',
+            'num': max_results
+        }
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+        }
+        
+        session = create_session()
+        response = session.get(search_url, params=params, headers=headers, timeout=10)
+        
+        if response.status_code == 200 and _HAVE_BS4:
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Extract PDF links from search results
+            for link in soup.find_all('a', href=True):
+                href = link['href']
+                
+                # Google search results have URLs in /url?q=ACTUAL_URL format
+                if '/url?q=' in href:
+                    actual_url = href.split('/url?q=')[1].split('&')[0]
+                    
+                    # Check if it's a PDF
+                    if '.pdf' in actual_url.lower():
+                        # Extract university name from query or URL
+                        uni_name = query.split()[0:3]  # First few words usually contain uni name
+                        uni_name = ' '.join(uni_name)
+                        
+                        doc = FinancialDocument(
+                            university=uni_name,
+                            url=actual_url,
+                            source='search'
+                        )
+                        documents.append(doc)
+                        
+                        if len(documents) >= max_results:
+                            break
+        
+        logger.info(f"Found {len(documents)} documents for query: {query}")
+        return documents
+        
+    except Exception as e:
+        logger.warning(f"Search failed: {e}")
+        return []
+
+
 def load_download_state(state_file: str = "download_state.json") -> dict:
     """Load the download state from a JSON file.
     
@@ -798,7 +871,8 @@ def process_documents(documents: List[FinancialDocument], output_dir: str,
 
 
 def main(verbose: bool = False, max_docs: Optional[int] = None, scrape: bool = True,
-         use_playwright: bool = True, visible_browser: bool = False) -> None:
+         use_playwright: bool = True, visible_browser: bool = False,
+         search_query: Optional[str] = None, output_dir: Optional[str] = None) -> None:
     """Main function to orchestrate document downloads.
     
     Parameters
@@ -813,6 +887,10 @@ def main(verbose: bool = False, max_docs: Optional[int] = None, scrape: bool = T
         Whether to use Playwright as fallback
     visible_browser : bool
         Whether to use visible browser for manual intervention
+    search_query : Optional[str]
+        Custom search query for targeted document search
+    output_dir : Optional[str]
+        Custom output directory (default: downloads_<timestamp>)
     """
     global logger
     
@@ -840,12 +918,21 @@ def main(verbose: bool = False, max_docs: Optional[int] = None, scrape: bool = T
             logger.warning(f"{Fore.YELLOW}Playwright not installed. Fallback method unavailable.{Style.RESET_ALL}")
             use_playwright = False
         
-        # Load documents from CSV files
-        all_documents = []
-        
-        # Find CSV files
-        results_files = list(Path('.').glob('university_financials_results_*.csv'))
-        gemini_file = Path('gemini_list.csv')
+        # Handle custom search query
+        if search_query:
+            logger.info(f"{Fore.CYAN}Using custom search query: {search_query}{Style.RESET_ALL}")
+            all_documents = search_for_documents(search_query)
+            
+            if not all_documents:
+                logger.warning(f"{Fore.YELLOW}No documents found for query: {search_query}{Style.RESET_ALL}")
+                return
+        else:
+            # Load documents from CSV files
+            all_documents = []
+            
+            # Find CSV files
+            results_files = list(Path('.').glob('university_financials_results_*.csv'))
+            gemini_file = Path('gemini_list.csv')
         
         if not results_files and not gemini_file.exists():
             logger.error(f"{Fore.RED}No CSV files found. Please run university_financials.py first.{Style.RESET_ALL}")
@@ -871,8 +958,9 @@ def main(verbose: bool = False, max_docs: Optional[int] = None, scrape: bool = T
             logger.info(f"{Fore.YELLOW}Limiting to {max_docs} documents for testing{Style.RESET_ALL}")
         
         # Create output directory
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = f"downloads_{timestamp}"
+        if not output_dir:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_dir = f"downloads_{timestamp}"
         
         logger.info(f"{Fore.CYAN}Output directory: {output_dir}{Style.RESET_ALL}")
         logger.info(f"{Fore.CYAN}Scrape pages: {scrape}{Style.RESET_ALL}")
@@ -969,15 +1057,46 @@ The script will automatically try methods in order until one succeeds.
         help='Use visible browser (allows manual security checks)'
     )
     
+    parser.add_argument(
+        '--search',
+        type=str,
+        metavar='QUERY',
+        help='Custom search query for targeted document search'
+    )
+    
+    parser.add_argument(
+        '--output',
+        type=str,
+        metavar='DIR',
+        help='Output directory for downloads (default: downloads_<timestamp>)'
+    )
+    
+    parser.add_argument(
+        '--limit',
+        type=int,
+        metavar='N',
+        help='Limit number of search results (used with --search)'
+    )
+    
+    parser.add_argument(
+        '--method',
+        type=str,
+        choices=['requests', 'playwright'],
+        default='requests',
+        help='Download method to use (default: requests)'
+    )
+    
     args = parser.parse_args()
     
     try:
         main(
             verbose=args.verbose,
-            max_docs=args.test,
+            max_docs=args.test or args.limit,
             scrape=not args.no_scrape,
-            use_playwright=not args.no_playwright,
-            visible_browser=args.visible_browser
+            use_playwright=not args.no_playwright and args.method != 'requests',
+            visible_browser=args.visible_browser,
+            search_query=args.search,
+            output_dir=args.output
         )
     except Exception as e:
         print(f"{Fore.RED}Unhandled exception: {e}{Style.RESET_ALL}")

@@ -99,6 +99,9 @@ dmypy.json
 data/
 downloads/
 
+# Extracted text files
+extracted_text/
+
 # Temporary files
 *.tmp
 temp/

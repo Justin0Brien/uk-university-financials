@@ -1,159 +1,311 @@
-# UK University Financial Statements Finder
+# UK University Financial Data Collection System
 
-This script automatically searches for and identifies financial statement URLs for UK universities.
+Automated system for collecting, extracting, and managing UK university financial documents. This coordinator-based system intelligently identifies data gaps and orchestrates document collection and text extraction.
 
-## Features
+## 🚀 Quick Start
 
-- ✅ **Comprehensive Error Handling**: Robust error checking throughout the entire codebase
-- 📝 **Detailed Logging**: Dual logging system (console + file) with timestamped log files
-- 🎨 **Colored Terminal Output**: Easy-to-read colored console output using colorama
-- 📊 **Progress Bars**: Visual progress tracking with tqdm
-- 💾 **CSV Export**: Automatically saves all results to timestamped CSV file
-- 🔍 **Smart Search**: Uses DuckDuckGo with automatic fallback to HTML scraping
-- 📈 **Statistics**: Detailed summary of search results and success rates
-- 🐛 **Verbose Mode**: Detailed debugging output with `-v` flag
-- 🎯 **Domain-Specific Search**: Targets each university's specific domain for accuracy
-- 📅 **Multi-Year Detection**: Finds financial statements from multiple years (2000-2099)
-- ⚡ **Retry Logic**: Automatically retries failed searches with exponential backoff
-- 🛡️ **Rate Limiting**: Built-in delays to respect search engine limits
+```bash
+# 1. Setup (one-time)
+./install.sh
+source venv/bin/activate
 
-## Installation
+# 2. Run coordinator to collect missing financial data
+python financial_data_coordinator.py --unis-per-iteration 10
 
-### Option 1: Automated Setup (Recommended)
+# 3. Check extracted_text/ for results (.txt and .json files)
+ls -la extracted_text/ | head -20
+```
 
-Run the installation script which will create a virtual environment and install all dependencies:
+## 📋 Overview
+
+The system consists of three main components:
+
+1. **`financial_data_coordinator.py`** - Main orchestrator (use this!)
+2. **`download_financial_documents.py`** - Downloads PDFs from university websites
+3. **`extract_pdf_text.py`** - Extracts text from PDFs with multi-column support
+
+The coordinator automatically manages the entire workflow: analyzing what data you have, identifying missing years, downloading new documents, and extracting their content.
+
+## 🎯 Main Command: The Coordinator
+
+The coordinator is your primary interface. It handles everything automatically:
+
+```bash
+# Basic usage - process 5 universities (default)
+python financial_data_coordinator.py
+
+# Process more universities per run
+python financial_data_coordinator.py --unis-per-iteration 10
+
+# Preview what would be searched (no downloads)
+python financial_data_coordinator.py --dry-run
+
+# Look further back in time (default: 5 years back, 2 forward)
+python financial_data_coordinator.py --max-lookback 10
+
+# Verbose output for debugging
+python financial_data_coordinator.py -v
+```
+
+### What the Coordinator Does
+
+1. **Analyzes** your existing `extracted_text/` directory
+2. **Identifies** missing financial years for each university
+3. **Searches** Google for missing documents
+4. **Downloads** all found PDFs to `downloads_coordinator_YYYYMMDD_HHMMSS/`
+5. **Extracts** all PDFs to both `.txt` and `.json` formats
+6. **Reports** final coverage summary
+
+### Single-Pass Operation
+
+The coordinator uses a batch approach:
+- Collects all search queries first
+- Downloads everything in one phase
+- Extracts everything in one phase
+- Much more efficient than iterating
+
+## 📂 Project Structure
+
+```
+University Financials/
+├── README.md                          # This file
+├── financial_data_coordinator.py      # Main coordinator script
+├── download_financial_documents.py    # Document downloader
+├── extract_pdf_text.py                # PDF text extractor
+├── gemini_list.csv                    # University list
+├── requirements.txt                   # Python dependencies
+├── docs/                              # Additional documentation
+│   ├── README_COORDINATOR.md          # Detailed coordinator guide
+│   ├── QUICK_START.md                 # Quick start guide
+│   ├── IMPLEMENTATION_SUMMARY.md      # Technical details
+│   └── ...                            # Other guides
+├── logs/                              # Log files (auto-created)
+│   ├── coordinator_*.log
+│   ├── extract_text_*.log
+│   └── coordinator_progress_*.json
+├── downloads_coordinator_*/           # Downloaded PDFs (timestamped)
+└── extracted_text/                    # Extracted text files
+    ├── *.txt                          # Plain text format
+    └── *.json                         # JSON format (with metadata)
+```
+
+## 🔧 Installation
+
+### Automated Setup (Recommended)
 
 ```bash
 ./install.sh
+source venv/bin/activate
 ```
 
-### Option 2: Manual Installation
-
-1. Create a virtual environment:
+### Manual Installation
 
 ```bash
+# Create virtual environment
 python3 -m venv venv
-```
+source venv/bin/activate  # or: source activate.sh
 
-2. Activate the virtual environment:
-
-```bash
-source venv/bin/activate  # On macOS/Linux
-# or
-venv\Scripts\activate  # On Windows
-```
-
-3. Install dependencies:
-
-```bash
+# Install dependencies
 pip install -r requirements.txt
 ```
 
 ### Dependencies
 
-- `beautifulsoup4` - HTML parsing for web scraping
-- `requests` - HTTP requests
-- `ddgs` - Official DuckDuckGo search API (optional but recommended)
-- `colorama` - Cross-platform colored terminal output
+Core libraries:
+- `pdfplumber` - PDF text extraction with multi-column support
+- `requests` - HTTP requests for downloading
+- `beautifulsoup4` - HTML parsing
+- `playwright` - Browser automation (optional)
+- `colorama` - Colored terminal output
 - `tqdm` - Progress bars
 
-## Usage
+## 📊 Output Formats
 
-### Quick Start
+### Text Files (.txt)
+Plain text extraction with page markers:
+```
+================================================================================
+PDF: University_of_Cambridge_annual_report_2023.pdf
+Pages: 156
+...
+================================================================================
+PAGE 1
+================================================================================
 
-1. Activate the virtual environment:
-
-```bash
-source venv/bin/activate
-# or use the helper script: ./activate.sh
+[Page content here]
 ```
 
-2. Run the script directly:
-
-```bash
-python university_financials.py
+### JSON Files (.json)
+Structured format with metadata:
+```json
+{
+  "metadata": {
+    "pdf_file": "University_of_Cambridge_annual_report_2023.pdf",
+    "pages": 156,
+    "title": "Annual Report 2023",
+    "author": "University of Cambridge"
+  },
+  "pages": [
+    {
+      "page": 1,
+      "text": "..."
+    }
+  ]
+}
 ```
 
-3. For verbose debugging output:
+## 🎓 Common Workflows
+
+### Collecting Missing Data for All Universities
 
 ```bash
-python university_financials.py -v
-# or
-python university_financials.py --verbose
+# Run multiple times to process different batches
+python financial_data_coordinator.py --unis-per-iteration 10  # Batch 1
+python financial_data_coordinator.py --unis-per-iteration 10  # Batch 2
+python financial_data_coordinator.py --unis-per-iteration 10  # Batch 3
+
+# The system automatically:
+# - Skips already-extracted files
+# - Creates new timestamped download directories
+# - Tracks progress in logs/
 ```
 
-4. Deactivate when done:
+### Checking Current Coverage
 
 ```bash
-deactivate
+# See what data you have
+ls -la extracted_text/ | wc -l
+
+# Run dry-run to see what's missing
+python financial_data_coordinator.py --dry-run
+
+# Check the summary in the output
 ```
 
-### Verbose Mode
+### Manual Download and Extract
 
-Use `-v` or `--verbose` flag for detailed debugging output that shows:
-- All search terms generated for each university
-- Each search result with title and URL
-- Relevance checking details with matched keywords
-- Link duplicate detection
-- Full search progress with numbered items
-- Color-coded DEBUG level messages
+If you need more control:
 
-Example:
 ```bash
-python university_financials.py --verbose
+# 1. Download from specific search
+python download_financial_documents.py --search "University of Cambridge 2023 annual report" --output downloads_manual --limit 5
+
+# 2. Extract from downloaded PDFs
+python extract_pdf_text.py downloads_manual -o extracted_text --fast --workers 4 --format both
 ```
 
-The script will:
-1. Load a list of 180+ UK universities
-2. Search for financial statement URLs for each university
-3. Display results with colored output and progress bars
-4. Save all results to a timestamped CSV file
-5. Generate a timestamped log file with detailed information
+## ⚡ Performance
 
-## Output
+- **Fast Mode**: 5-10x speedup over normal extraction
+- **Parallel Processing**: 4 workers process multiple PDFs simultaneously
+- **Combined**: ~10-15 seconds per PDF vs ~3-4 minutes
+- **Warning Suppression**: Eliminates pdfminer warnings for 30x additional speedup on malformed PDFs
+- **Resume Capability**: Automatically skips already-processed files
 
-### Console Output
-- Colored status messages (green for success, yellow for warnings, red for errors)
-- Progress bars showing search progress
-- Summary statistics at the end
+## 📖 Additional Documentation
 
-### CSV File
-- Automatically generated with timestamped filename (e.g., `university_financials_results_20251122_143022.csv`)
-- Contains columns: University, Country, Domain, Year, URL
-- Ready for data analysis in Excel, Python, R, etc.
+For more detailed information, see the `docs/` folder:
 
-### Log Files
-- Timestamped log files (e.g., `university_financials_20251122_143022.log`)
-- Detailed debug information
-- Full error stack traces for troubleshooting
+- **`docs/README_COORDINATOR.md`** - Complete coordinator documentation
+- **`docs/QUICK_START.md`** - Step-by-step getting started guide
+- **`docs/IMPLEMENTATION_SUMMARY.md`** - Technical implementation details
+- **`docs/WORKFLOW.md`** - Detailed workflow explanations
+- **`docs/DOWNLOAD_GUIDE.md`** - Manual download instructions
+- **`docs/CSV_GUIDE.md`** - Working with CSV files
 
-## Error Handling
+## 🔍 Troubleshooting
 
-The script includes comprehensive error handling for:
-- Network timeouts and connection errors
-- Invalid URLs and malformed data
-- Missing dependencies with graceful fallbacks
-- Search engine rate limiting
-- Keyboard interrupts (Ctrl+C)
+### No PDFs found
+```bash
+# Check download directory
+ls downloads_coordinator_*/
 
-## Logging Levels
+# Try manual search first
+python download_financial_documents.py --search "University Name" --output test_download --limit 3
+```
 
-- **DEBUG**: Detailed diagnostic information (file only)
-- **INFO**: General informational messages
-- **WARNING**: Warning messages for non-critical issues
-- **ERROR**: Error messages with full stack traces
+### Extraction errors
+```bash
+# Check logs
+tail -f logs/extract_text_*.log
 
-## Customization
+# Try single file
+python extract_pdf_text.py test_file.pdf -o test_output --fast
+```
 
-You can modify:
-- `max_links`: Maximum URLs to find per university (default: 5)
-- Search terms in the `search_terms()` method
-- URL relevance heuristics in `is_relevant_url()`
-- Logging configuration in `setup_logging()`
+### Google search blocked
+- Wait 15-30 minutes between runs
+- Use `--unis-per-iteration 5` for smaller batches
+- Consider spreading across multiple days
 
-## Notes
+### Already processed files
+The system automatically skips files that have been extracted. To force reprocessing:
+```bash
+# Delete specific extracted files
+rm extracted_text/University_Name_2023*
 
-- The script respects rate limits with 1-second delays between searches
-- Only searches for URLs on academic domains (.ac.uk, .edu, .edu.uk)
-- Does not download documents, only identifies URLs
-- All UK nations included: England, Scotland, Wales, Northern Ireland
+# Then re-run extraction
+python extract_pdf_text.py downloads_dir -o extracted_text --fast --workers 4
+```
+
+## 🛡️ Git Configuration
+
+The repository is configured to exclude:
+- ✅ All PDF files (`*.pdf`, `downloads_*/`)
+- ✅ Extracted text files (`extracted_text/`)
+- ✅ Log files (`logs/`, `*.log`)
+- ✅ Progress files (`coordinator_progress_*.json`)
+- ✅ Virtual environment (`venv/`)
+- ✅ Python cache (`__pycache__/`, `*.pyc`)
+
+This keeps the repository clean and focused on code, not data.
+
+## 📝 File Naming Convention
+
+Extracted files follow this pattern:
+```
+UniversityName_DocumentTitle.txt
+UniversityName_DocumentTitle.json
+```
+
+Examples:
+- `University_of_Cambridge_annual-report-2023-24.txt`
+- `University_of_Cambridge_annual-report-2023-24.json`
+- `Anglia_Ruskin_University_financial-statements-2022-23.txt`
+
+## 🚦 Exit Codes and Error Handling
+
+The coordinator provides clear exit codes:
+- `0` - Success
+- `1` - Error (check logs)
+- `130` - User interrupted (Ctrl+C)
+
+All errors are logged to `logs/coordinator_*.log`
+
+## 🤝 Contributing
+
+When contributing:
+1. Never commit PDF files, extracted text, or logs
+2. Test changes with `--dry-run` first
+3. Update documentation in `docs/` as needed
+4. Keep the main README focused on the coordinator workflow
+
+## 📄 License
+
+This tool is for educational and research purposes. Always respect:
+- Website terms of service
+- robots.txt files  
+- Rate limiting and fair use
+- Copyright and data usage policies
+
+## 🆘 Support
+
+For issues:
+1. Check `logs/` directory for error details
+2. Run with `-v` flag for verbose output
+3. Review `docs/README_COORDINATOR.md` for detailed information
+4. Use `--dry-run` to preview operations without making changes
+
+---
+
+**Pro Tip**: Start with `--dry-run` to see what the coordinator would do, then run it for real once you're comfortable with the plan!
