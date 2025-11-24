@@ -102,6 +102,9 @@ downloads/
 # Extracted text files
 extracted_text/
 
+# CSV tracker (contains local file paths)
+financial_data_tracker.csv
+
 # Temporary files
 *.tmp
 temp/

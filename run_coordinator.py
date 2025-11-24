@@ -16,6 +16,7 @@ The script works backward in time, attempting to find reports as far back as ava
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import logging
 import re
@@ -65,6 +66,253 @@ def setup_logging(verbose: bool = False) -> None:
     root_logger.addHandler(console_handler)
     
     logging.info(f"Coordinator logging initialized. Log file: {log_file}")
+
+
+# =============================================================================
+# CSV Tracking System
+# =============================================================================
+
+def load_csv_tracker(csv_path: Path) -> List[Dict]:
+    """
+    Load the CSV tracking file.
+    
+    Returns list of dicts with keys:
+    - id, university, year, source_url, pdf_path, txt_path, json_path
+    """
+    if not csv_path.exists():
+        logging.info(f"CSV tracker doesn't exist yet: {csv_path}")
+        return []
+    
+    rows = []
+    with open(csv_path, 'r', encoding='utf-8', newline='') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            rows.append(row)
+    
+    logging.info(f"Loaded {len(rows)} rows from CSV tracker")
+    return rows
+
+
+def save_csv_tracker(csv_path: Path, rows: List[Dict]) -> None:
+    """
+    Save the CSV tracking file.
+    
+    Columns: id, university, year, source_url, pdf_path, txt_path, json_path
+    """
+    # Ensure directory exists
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    fieldnames = ['id', 'university', 'year', 'source_url', 'pdf_path', 'txt_path', 'json_path']
+    
+    with open(csv_path, 'w', encoding='utf-8', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    
+    logging.info(f"Saved {len(rows)} rows to CSV tracker: {csv_path}")
+
+
+def get_next_id(rows: List[Dict]) -> int:
+    """Get the next available ID number."""
+    if not rows:
+        return 1
+    
+    max_id = max(int(row['id']) for row in rows)
+    return max_id + 1
+
+
+def find_csv_row(rows: List[Dict], university: str, year: str, pdf_path: str = None) -> Optional[Dict]:
+    """
+    Find a row matching university, year, and optionally pdf_path.
+    
+    Returns the matching row or None.
+    """
+    for row in rows:
+        if row['university'] == university and row['year'] == year:
+            # If pdf_path specified, must match too
+            if pdf_path is None or row.get('pdf_path', '') == pdf_path:
+                return row
+    return None
+
+
+def add_placeholder_rows(rows: List[Dict], university: str, years: List[str]) -> List[Dict]:
+    """
+    Add placeholder rows for missing university/year combinations.
+    
+    Only adds if the combination doesn't already exist.
+    """
+    next_id = get_next_id(rows)
+    added_count = 0
+    
+    for year in years:
+        # Check if any row exists for this uni/year combo
+        existing = [r for r in rows if r['university'] == university and r['year'] == year]
+        
+        if not existing:
+            # Add placeholder row
+            rows.append({
+                'id': str(next_id),
+                'university': university,
+                'year': year,
+                'source_url': '',
+                'pdf_path': '',
+                'txt_path': '',
+                'json_path': ''
+            })
+            next_id += 1
+            added_count += 1
+    
+    if added_count > 0:
+        logging.debug(f"Added {added_count} placeholder rows for {university}")
+    
+    return rows
+
+
+def update_csv_with_extracted_files(rows: List[Dict], extracted_dir: Path) -> List[Dict]:
+    """
+    Scan extracted_text directory and update CSV with found files.
+    
+    Adds rows for any university/year combinations found in extracted files.
+    """
+    txt_files = list(extracted_dir.glob("*.txt"))
+    json_files = list(extracted_dir.glob("*.json"))
+    
+    logging.info(f"Updating CSV with {len(txt_files)} txt files and {len(json_files)} json files")
+    
+    # Process txt files
+    for txt_file in txt_files:
+        uni_name = extract_university_name(txt_file.name)
+        year = extract_year_from_filename(txt_file.name)
+        
+        if not uni_name or not year:
+            continue
+        
+        # Check for invalid years
+        try:
+            year_int = int(year.split('-')[0])
+            if year_int < 1990 or year_int > 2100:
+                continue
+        except (ValueError, IndexError):
+            continue
+        
+        # Find corresponding json file
+        json_file = extracted_dir / txt_file.name.replace('.txt', '.json')
+        json_path = str(json_file.absolute()) if json_file.exists() else ''
+        
+        # Try to find matching PDF (look in all downloads_* directories)
+        pdf_path = ''
+        pdf_search_name = txt_file.stem  # Filename without .txt
+        for downloads_dir in Path('.').glob('downloads_*'):
+            possible_pdf = downloads_dir / f"{pdf_search_name}.pdf"
+            if possible_pdf.exists():
+                pdf_path = str(possible_pdf.absolute())
+                break
+        
+        # Check if row already exists for this file
+        existing_row = None
+        for row in rows:
+            if (row['university'] == uni_name and 
+                row['year'] == year and 
+                row.get('txt_path', '') == str(txt_file.absolute())):
+                existing_row = row
+                break
+        
+        if existing_row:
+            # Update existing row
+            existing_row['txt_path'] = str(txt_file.absolute())
+            existing_row['json_path'] = json_path
+            if pdf_path and not existing_row.get('pdf_path'):
+                existing_row['pdf_path'] = pdf_path
+        else:
+            # Create new row
+            next_id = get_next_id(rows)
+            rows.append({
+                'id': str(next_id),
+                'university': uni_name,
+                'year': year,
+                'source_url': '',  # Unknown for existing files
+                'pdf_path': pdf_path,
+                'txt_path': str(txt_file.absolute()),
+                'json_path': json_path
+            })
+    
+    return rows
+
+
+def update_csv_with_downloads(rows: List[Dict], downloads_dir: Path) -> List[Dict]:
+    """
+    Scan downloads directory and update CSV with downloaded PDFs.
+    
+    Updates pdf_path for existing rows or creates new rows.
+    """
+    pdf_files = list(downloads_dir.glob("*.pdf"))
+    
+    logging.info(f"Updating CSV with {len(pdf_files)} downloaded PDF files")
+    
+    for pdf_file in pdf_files:
+        uni_name = extract_university_name(pdf_file.name)
+        year = extract_year_from_filename(pdf_file.name)
+        
+        if not uni_name or not year:
+            continue
+        
+        # Check for invalid years
+        try:
+            year_int = int(year.split('-')[0])
+            if year_int < 1990 or year_int > 2100:
+                continue
+        except (ValueError, IndexError):
+            continue
+        
+        # Look for corresponding txt/json files
+        txt_file = Path('extracted_text') / f"{pdf_file.stem}.txt"
+        json_file = Path('extracted_text') / f"{pdf_file.stem}.json"
+        
+        txt_path = str(txt_file.absolute()) if txt_file.exists() else ''
+        json_path = str(json_file.absolute()) if json_file.exists() else ''
+        
+        # Find or create row
+        existing_row = None
+        for row in rows:
+            if (row['university'] == uni_name and 
+                row['year'] == year and 
+                not row.get('pdf_path')):  # Empty pdf_path (placeholder or incomplete)
+                existing_row = row
+                break
+        
+        if existing_row:
+            # Update placeholder row
+            existing_row['pdf_path'] = str(pdf_file.absolute())
+            existing_row['txt_path'] = txt_path
+            existing_row['json_path'] = json_path
+        else:
+            # Check if row exists with this exact PDF
+            pdf_exists = any(
+                row['university'] == uni_name and 
+                row['year'] == year and 
+                row.get('pdf_path') == str(pdf_file.absolute())
+                for row in rows
+            )
+            
+            if not pdf_exists:
+                # Create new row
+                next_id = get_next_id(rows)
+                rows.append({
+                    'id': str(next_id),
+                    'university': uni_name,
+                    'year': year,
+                    'source_url': '',  # Will be filled later if available
+                    'pdf_path': str(pdf_file.absolute()),
+                    'txt_path': txt_path,
+                    'json_path': json_path
+                })
+    
+    return rows
+
+
+# =============================================================================
+# End CSV Tracking System
+# =============================================================================
 
 
 def colored_text(text: str, color: str) -> str:
@@ -638,8 +886,20 @@ Examples:
     logging.info(f"Downloads directory: {args.downloads}")
     logging.info(f"Extracted text directory: {args.extracted}")
     
+    # CSV tracker setup
+    csv_tracker_path = Path('financial_data_tracker.csv')
+    logging.info(f"CSV tracker: {csv_tracker_path}")
+    
     # Track progress across iterations
     progress_file = Path(f'coordinator_progress_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json')
+    
+    # Step 0: Load and initialize CSV tracker
+    logging.info("\nStep 0: Loading CSV tracker...")
+    csv_rows = load_csv_tracker(csv_tracker_path)
+    
+    # Update CSV with any existing extracted files
+    csv_rows = update_csv_with_extracted_files(csv_rows, args.extracted)
+    save_csv_tracker(csv_tracker_path, csv_rows)
     
     # Step 1: Analyze current data
     logging.info("\nStep 1: Analyzing extracted text files...")
@@ -664,6 +924,13 @@ Examples:
         return
     
     logging.info(f"Found gaps for {len(missing_data)} universities")
+    
+    # Add placeholder rows for missing years
+    logging.info("\nAdding placeholders for missing years to CSV...")
+    for uni_name, years in missing_data.items():
+        csv_rows = add_placeholder_rows(csv_rows, uni_name, years)
+    save_csv_tracker(csv_tracker_path, csv_rows)
+    logging.info(f"CSV tracker now has {len(csv_rows)} total rows")
     
     # Step 3: Print initial summary
     print_summary(university_data, missing_data)
@@ -713,6 +980,12 @@ Examples:
     
     logging.info(f"\nDownloaded from {successful_downloads}/{len(all_queries)} searches")
     
+    # Update CSV with downloaded PDFs
+    if successful_downloads > 0:
+        logging.info("\nUpdating CSV tracker with downloaded PDFs...")
+        csv_rows = update_csv_with_downloads(csv_rows, args.downloads)
+        save_csv_tracker(csv_tracker_path, csv_rows)
+    
     # Step 7: Extract ALL PDFs at once
     if successful_downloads > 0:
         print(colored_text(f"\n{'='*80}", Fore.CYAN))
@@ -732,6 +1005,11 @@ Examples:
                 workers=4,
                 output_format='both'  # Extract both txt and json
             )
+            
+            # Update CSV with extracted files
+            logging.info("\nUpdating CSV tracker with extracted files...")
+            csv_rows = update_csv_with_extracted_files(csv_rows, args.extracted)
+            save_csv_tracker(csv_tracker_path, csv_rows)
         else:
             logging.warning("No PDF files found in downloads directory")
     else:
@@ -745,6 +1023,13 @@ Examples:
     university_data = analyze_extracted_text(args.extracted)
     missing_data = identify_missing_years(university_data, max_lookback=args.max_lookback, max_forward=2)
     print_summary(university_data, missing_data)
+    
+    # Final CSV update
+    logging.info("\nFinal CSV tracker update...")
+    csv_rows = update_csv_with_extracted_files(csv_rows, args.extracted)
+    save_csv_tracker(csv_tracker_path, csv_rows)
+    
+    print(colored_text(f"\n📊 CSV Tracker: {csv_tracker_path} ({len(csv_rows)} rows)", Fore.GREEN))
     
     logging.info(f"\nProgress saved to: {progress_file}")
     print(colored_text("\nDone!", Fore.GREEN))

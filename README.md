@@ -49,12 +49,28 @@ python run_coordinator.py -v
 
 ### What the Coordinator Does
 
-1. **Analyzes** your existing `extracted_text/` directory
-2. **Identifies** missing financial years for each university
-3. **Searches** Google for missing documents
-4. **Downloads** all found PDFs to `downloads_coordinator_YYYYMMDD_HHMMSS/`
-5. **Extracts** all PDFs to both `.txt` and `.json` formats
-6. **Reports** final coverage summary
+1. **Loads** the CSV tracker (`financial_data_tracker.csv`) to see what's been collected
+2. **Analyzes** your existing `extracted_text/` directory
+3. **Identifies** missing financial years for each university
+4. **Creates placeholders** in CSV for missing university/year combinations
+5. **Searches** Google for missing documents
+6. **Downloads** all found PDFs to `downloads_coordinator_YYYYMMDD_HHMMSS/`
+7. **Extracts** all PDFs to both `.txt` and `.json` formats
+8. **Updates** CSV tracker with all file paths and metadata
+9. **Reports** final coverage summary
+
+### CSV Tracking System
+
+The coordinator maintains `financial_data_tracker.csv` with columns:
+- **id** - Unique record ID
+- **university** - University name
+- **year** - Financial year (e.g., "2023-24" or "2023")
+- **source_url** - URL where document was found (if available)
+- **pdf_path** - Full path to downloaded PDF file
+- **txt_path** - Full path to extracted .txt file
+- **json_path** - Full path to extracted .json file
+
+Missing data is tracked with placeholder rows (blank paths) so you know what's still needed.
 
 ### Single-Pass Operation
 
@@ -73,6 +89,7 @@ University Financials/
 ├── step1_download_pdfs.py             # PDF downloader (used by coordinator)
 ├── step2_extract_text.py              # Text extractor (used by coordinator)
 ├── legacy_url_finder.py               # Old URL finder script (not used)
+├── financial_data_tracker.csv         # 📊 CSV tracking all documents
 ├── gemini_list.csv                    # University list
 ├── requirements.txt                   # Python dependencies
 ├── docs/                              # Additional documentation
@@ -180,7 +197,27 @@ ls -la extracted_text/ | wc -l
 # Run dry-run to see what's missing
 python run_coordinator.py --dry-run
 
-# Check the summary in the output
+# Check the CSV tracker
+head -20 financial_data_tracker.csv
+
+# Count records by university
+cut -d',' -f2 financial_data_tracker.csv | sort | uniq -c | sort -nr
+```
+
+### Working with the CSV Tracker
+
+```bash
+# View all records for a specific university
+grep "Cambridge" financial_data_tracker.csv
+
+# Find missing data (rows with empty pdf_path)
+awk -F',' '$5 == ""' financial_data_tracker.csv
+
+# Count how many documents per year
+cut -d',' -f3 financial_data_tracker.csv | sort | uniq -c
+
+# Export to Excel or open in spreadsheet software
+open financial_data_tracker.csv
 ```
 
 ### Manual Download and Extract

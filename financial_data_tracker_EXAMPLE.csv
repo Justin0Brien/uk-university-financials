@@ -1,0 +1,7 @@
+id,university,year,source_url,pdf_path,txt_path,json_path
+1,University of Cambridge,2023-24,,/path/to/downloads/University_of_Cambridge_2023-24.pdf,/path/to/extracted_text/University_of_Cambridge_2023-24.txt,/path/to/extracted_text/University_of_Cambridge_2023-24.json
+2,University of Cambridge,2022-23,,/path/to/downloads/University_of_Cambridge_2022-23.pdf,/path/to/extracted_text/University_of_Cambridge_2022-23.txt,/path/to/extracted_text/University_of_Cambridge_2022-23.json
+3,University of Cambridge,2021-22,,,,,
+4,University of Oxford,2023-24,,/path/to/downloads/University_of_Oxford_2023-24.pdf,/path/to/extracted_text/University_of_Oxford_2023-24.txt,/path/to/extracted_text/University_of_Oxford_2023-24.json
+5,University of Oxford,2022-23,,,,,
+6,Anglia Ruskin University,2023-24,,/path/to/downloads/Anglia_Ruskin_University_2023-24.pdf,/path/to/extracted_text/Anglia_Ruskin_University_2023-24.txt,/path/to/extracted_text/Anglia_Ruskin_University_2023-24.json
