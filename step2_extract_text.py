@@ -261,6 +261,171 @@ def extract_text_from_pdf(pdf_path: Path, extract_tables: bool = True, fast_mode
     return result
 
 
+def validate_annual_report(result: Dict, min_confidence: float = 0.6) -> Tuple[bool, float, str]:
+    """
+    Validate if extracted PDF content is an official university annual report.
+    
+    Checks the first few pages for indicators of official annual reports vs
+    academic papers, research documents, theses, or other irrelevant content.
+    
+    Args:
+        result: Extraction result dictionary from extract_text_from_pdf
+        min_confidence: Minimum confidence score (0-1) to be considered valid
+        
+    Returns:
+        Tuple of (is_valid, confidence_score, reason)
+        - is_valid: True if document appears to be an official annual report
+        - confidence_score: Float 0-1 indicating confidence
+        - reason: String explaining the decision
+    """
+    if not result.get('success') or not result.get('pages'):
+        return False, 0.0, "Failed to extract content from PDF"
+    
+    # Combine text from first 5 pages (cover, contents, intro)
+    sample_pages = result['pages'][:5]
+    sample_text = ' '.join(page.get('text', '') for page in sample_pages).lower()
+    
+    # Also check full text for certain patterns
+    full_text = ' '.join(page.get('text', '') for page in result['pages']).lower()
+    
+    score = 0.0
+    reasons = []
+    
+    # ===== POSITIVE INDICATORS (official annual reports) =====
+    
+    # Strong indicators - official terminology found in real annual reports
+    strong_positive = [
+        'annual report and accounts',
+        'annual report and financial statements', 
+        'report and financial statements',
+        'statement of comprehensive income',
+        'consolidated statement of financial position',
+        'statement of changes in reserves',
+        'cash flow statement',
+        'notes to the financial statements',
+        'statement of principal accounting policies',
+        'independent auditor',  # auditor's report
+        'report of the governing body',
+        'corporate governance statement',
+        'statement of internal control',
+        'members of the governing body',
+        'board of governors',
+        'court of governors',
+        'principal accounting policies',
+        'related party transactions',
+        'staff costs',
+        'fixed assets',
+        'creditors',
+        'debtors',
+        'endowment',
+    ]
+    
+    strong_matches = sum(1 for term in strong_positive if term in full_text)
+    if strong_matches >= 5:
+        score += 0.5
+        reasons.append(f"Found {strong_matches} strong official report indicators")
+    elif strong_matches >= 3:
+        score += 0.3
+        reasons.append(f"Found {strong_matches} official report indicators")
+    elif strong_matches >= 1:
+        score += 0.15
+        reasons.append(f"Found {strong_matches} official report indicator(s)")
+    
+    # Moderate indicators - appear in official reports
+    moderate_positive = [
+        'vice-chancellor',
+        'vice chancellor',
+        'registrar',
+        'bursar',
+        'chair of',
+        'annual accounts',
+        'financial review',
+        'operating and financial review',
+        'strategic report',
+        'public benefit statement',
+        'charitable status',
+        'risk management',
+        'reserves policy',
+    ]
+    
+    moderate_matches = sum(1 for term in moderate_positive if term in full_text)
+    if moderate_matches >= 3:
+        score += 0.2
+        reasons.append(f"Found {moderate_matches} governance terms")
+    elif moderate_matches >= 1:
+        score += 0.1
+        reasons.append(f"Found {moderate_matches} governance term(s)")
+    
+    # Page count check - annual reports typically 30-150 pages
+    page_count = result.get('total_pages', 0)
+    if 25 <= page_count <= 200:
+        score += 0.1
+        reasons.append(f"Appropriate page count ({page_count} pages)")
+    elif page_count < 10:
+        score -= 0.1
+        reasons.append(f"Too few pages ({page_count}) for annual report")
+    
+    # ===== NEGATIVE INDICATORS (academic/research content) =====
+    
+    # Strong negative - definitely not an annual report
+    strong_negative = [
+        'abstract',  # research papers have abstracts
+        'keywords:',  # research papers have keywords
+        'introduction\n',  # formal paper sections
+        'literature review',
+        'methodology',
+        'research question',
+        'hypothesis',
+        'bibliography',
+        'references\n',  # academic citations section
+        'submitted in partial fulfillment',  # thesis
+        'thesis submitted',
+        'dissertation',
+        'phd',
+        'master of',
+        'bachelor of',
+        'working paper',
+        'discussion paper',
+        'journal of',
+        'volume ',  # journal volume
+        'doi:',  # digital object identifier
+        'issn',  # journal identifier
+        'course handbook',
+        'module guide',
+        'student handbook',
+        'lecture notes',
+    ]
+    
+    negative_matches = sum(1 for term in strong_negative if term in full_text)
+    if negative_matches >= 3:
+        score -= 0.5
+        reasons.append(f"REJECTED: Found {negative_matches} academic/research indicators")
+    elif negative_matches >= 1:
+        score -= 0.2
+        reasons.append(f"Warning: Found {negative_matches} academic indicator(s)")
+    
+    # Check for thesis/dissertation patterns in first page (usually title page)
+    first_page = sample_pages[0].get('text', '').lower() if sample_pages else ''
+    thesis_patterns = ['thesis', 'dissertation', 'submitted', 'degree of', 'faculty of']
+    if any(p in first_page for p in thesis_patterns):
+        score -= 0.4
+        reasons.append("REJECTED: Title page indicates thesis/dissertation")
+    
+    # Normalize score to 0-1 range
+    confidence = max(0.0, min(1.0, score))
+    
+    # Determine validity
+    is_valid = confidence >= min_confidence and negative_matches < 3
+    
+    # Create summary reason
+    if is_valid:
+        summary = f"Valid annual report (confidence: {confidence:.2f}). " + "; ".join(reasons[:3])
+    else:
+        summary = f"Not an annual report (confidence: {confidence:.2f}). " + "; ".join(reasons[:3])
+    
+    return is_valid, confidence, summary
+
+
 def save_extracted_text(result: Dict, output_dir: Path, format: str = 'txt') -> Optional[Path]:
     """
     Save extracted text to file.
@@ -345,22 +510,37 @@ def find_pdf_files(input_dir: Path, recursive: bool = True) -> List[Path]:
     return sorted(pdf_files)
 
 
-def process_single_pdf(args: Tuple[Path, Path, bool, str, bool, bool, int]) -> Tuple[bool, Dict]:
+def process_single_pdf(args: Tuple[Path, Path, bool, str, bool, bool, int, bool]) -> Tuple[bool, Dict]:
     """
     Process a single PDF file (worker function for multiprocessing).
     
     Args:
-        args: Tuple of (pdf_path, output_dir, extract_tables, format, verbose, fast_mode, timeout)
+        args: Tuple of (pdf_path, output_dir, extract_tables, format, verbose, fast_mode, timeout, validate)
         
     Returns:
         Tuple of (success, result_dict)
     """
-    pdf_path, output_dir, extract_tables, format, verbose, fast_mode, timeout = args
+    pdf_path, output_dir, extract_tables, format, verbose, fast_mode, timeout, validate = args
     
     # Extract text with timeout
     result = extract_text_from_pdf(pdf_path, extract_tables=extract_tables, fast_mode=fast_mode, timeout=timeout)
     
     if result['success']:
+        # Optionally validate if this is actually an annual report
+        if validate:
+            is_valid, confidence, reason = validate_annual_report(result)
+            if not is_valid:
+                logging.warning(f"Validation failed for {pdf_path.name}: {reason}")
+                return False, {
+                    'filename': pdf_path.name,
+                    'error': f'Validation failed: {reason}',
+                    'success': False,
+                    'validation_failed': True,
+                    'confidence': confidence
+                }
+            else:
+                logging.debug(f"Validated {pdf_path.name}: {reason}")
+        
         # Save extracted text
         saved_path = save_extracted_text(result, output_dir, format=format)
         if saved_path:
@@ -393,7 +573,8 @@ def process_pdfs(
     verbose: bool = False,
     fast_mode: bool = False,
     workers: int = 1,
-    timeout: int = 300
+    timeout: int = 300,
+    validate: bool = False
 ) -> Dict:
     """
     Process all PDF files in a directory.
@@ -409,6 +590,7 @@ def process_pdfs(
         fast_mode: Use faster but less precise extraction (5-10x speedup)
         workers: Number of parallel worker processes (1=sequential, >1=parallel)
         timeout: Maximum time in seconds per PDF (default: 300s/5min)
+        validate: Validate that PDFs are official annual reports (reject academic papers, theses, etc.)
         
     Returns:
         Dictionary with processing statistics
@@ -462,23 +644,30 @@ def process_pdfs(
         'total_files': initial_count,
         'successful': skipped_count,  # Count already-processed as successful
         'failed': 0,
+        'validation_rejected': 0,  # Rejected by validation (not annual reports)
         'total_pages': 0,
         'failed_files': [],
+        'rejected_files': [],  # Files rejected by validation
         'skipped': skipped_count
     }
     
     # Use parallel processing if workers > 1
     if workers > 1:
         logging.info(f"Using {workers} parallel workers")
+        if validate:
+            logging.info("Validation enabled: will reject non-annual-report documents")
         
         # Prepare arguments for worker processes
         worker_args = [
-            (pdf_path, output_dir, extract_tables, format, verbose, fast_mode, timeout)
+            (pdf_path, output_dir, extract_tables, format, verbose, fast_mode, timeout, validate)
             for pdf_path in pdf_files
         ]
         
         # Process with multiprocessing pool
-        with mp.Pool(processes=workers) as pool:
+        pool = None
+        try:
+            pool = mp.Pool(processes=workers)
+            
             if TQDM_AVAILABLE:
                 results = list(tqdm(
                     pool.imap(process_single_pdf, worker_args),
@@ -488,6 +677,31 @@ def process_pdfs(
                 ))
             else:
                 results = pool.map(process_single_pdf, worker_args)
+            
+            # Close pool properly
+            pool.close()
+            pool.join()
+            
+        except KeyboardInterrupt:
+            logging.warning("Interrupted by user. Cleaning up worker processes...")
+            if pool:
+                pool.terminate()
+                pool.join()
+            raise
+        except Exception as e:
+            logging.error(f"Error in multiprocessing: {e}")
+            if pool:
+                pool.terminate()
+                pool.join()
+            raise
+        finally:
+            # Ensure pool is cleaned up
+            if pool is not None:
+                try:
+                    pool.close()
+                    pool.join()
+                except Exception:
+                    pass  # Pool already terminated
         
         # Collect statistics
         for success, result in results:
@@ -500,14 +714,25 @@ def process_pdfs(
                         Fore.GREEN
                     ))
             else:
-                stats['failed'] += 1
-                stats['failed_files'].append(result['filename'])
-                logging.error(colored_text(
-                    f"✗ {result['filename']}: {result.get('error', 'Unknown error')}",
-                    Fore.RED
-                ))
+                if result.get('validation_failed'):
+                    stats['validation_rejected'] += 1
+                    stats['rejected_files'].append(result['filename'])
+                    logging.warning(colored_text(
+                        f"⊘ {result['filename']}: Rejected (not an annual report) - {result.get('error', '')}",
+                        Fore.YELLOW
+                    ))
+                else:
+                    stats['failed'] += 1
+                    stats['failed_files'].append(result['filename'])
+                    logging.error(colored_text(
+                        f"✗ {result['filename']}: {result.get('error', 'Unknown error')}",
+                        Fore.RED
+                    ))
     else:
         # Sequential processing (original code)
+        if validate:
+            logging.info("Validation enabled: will reject non-annual-report documents")
+        
         iterator = tqdm(pdf_files, desc="Extracting text", unit="file") if TQDM_AVAILABLE else pdf_files
         
         for pdf_path in iterator:
@@ -518,6 +743,20 @@ def process_pdfs(
             result = extract_text_from_pdf(pdf_path, extract_tables=extract_tables, fast_mode=fast_mode, timeout=timeout)
             
             if result['success']:
+                # Optionally validate if this is actually an annual report
+                if validate:
+                    is_valid, confidence, reason = validate_annual_report(result)
+                    if not is_valid:
+                        stats['validation_rejected'] += 1
+                        stats['rejected_files'].append(str(pdf_path))
+                        logging.warning(colored_text(
+                            f"⊘ {pdf_path.name}: Rejected (not an annual report) - {reason}",
+                            Fore.YELLOW
+                        ))
+                        continue
+                    else:
+                        logging.debug(f"Validated {pdf_path.name}: {reason}")
+                
                 # Save extracted text
                 saved_path = save_extracted_text(result, output_dir, format=format)
                 if saved_path:
@@ -627,6 +866,12 @@ Performance tips:
     )
     
     parser.add_argument(
+        '--validate',
+        action='store_true',
+        help='Validate PDFs are official annual reports (reject theses, research papers, etc.)'
+    )
+    
+    parser.add_argument(
         '--workers', '-w',
         type=int,
         default=1,
@@ -679,6 +924,8 @@ Performance tips:
     logging.info(f"Worker processes: {args.workers}")
     if args.fast:
         logging.info(colored_text("Fast mode: ENABLED (5-10x faster, less precise)", Fore.YELLOW))
+    if args.validate:
+        logging.info(colored_text("Validation: ENABLED (will reject non-annual-reports)", Fore.YELLOW))
     if args.workers > 1:
         logging.info(colored_text(f"Parallel processing: ENABLED ({args.workers} workers)", Fore.YELLOW))
     
@@ -693,7 +940,8 @@ Performance tips:
         verbose=args.verbose,
         fast_mode=args.fast,
         workers=args.workers,
-        timeout=300  # 5 minute timeout per PDF
+        timeout=300,  # 5 minute timeout per PDF
+        validate=args.validate
     )
     
     # Print summary
@@ -704,8 +952,15 @@ Performance tips:
     if stats.get('skipped', 0) > 0:
         print(colored_text(f"Skipped (already processed): {stats['skipped']}", Fore.YELLOW))
     print(colored_text(f"Newly processed: {stats['successful'] - stats.get('skipped', 0)}", Fore.GREEN))
+    if stats.get('validation_rejected', 0) > 0:
+        print(colored_text(f"Rejected (not annual reports): {stats['validation_rejected']}", Fore.YELLOW))
     print(colored_text(f"Failed: {stats['failed']}", Fore.RED if stats['failed'] > 0 else Fore.GREEN))
     print(f"Total pages extracted: {stats['total_pages']}")
+    
+    if stats.get('rejected_files') and args.verbose:
+        print(colored_text("\nRejected files (not annual reports):", Fore.YELLOW))
+        for rejected_file in stats['rejected_files']:
+            print(f"  - {rejected_file}")
     
     if stats['failed_files'] and args.verbose:
         print(colored_text("\nFailed files:", Fore.YELLOW))

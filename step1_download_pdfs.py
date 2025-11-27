@@ -149,6 +149,18 @@ def search_for_documents(query: str, max_results: int = 10) -> List[FinancialDoc
         # Use DuckDuckGo search - include PDF in query text instead of filetype operator
         search_query = f"{query} PDF"
         logger.info(f"Searching DuckDuckGo for: {search_query}")
+        print(f"{Fore.CYAN}Searching DuckDuckGo for: {search_query}{Style.RESET_ALL}")
+        
+        # Extract domain filter from query if present (site:domain.ac.uk format)
+        expected_domain = None
+        if 'site:' in query:
+            # Extract domain from site: operator
+            import re
+            domain_match = re.search(r'site:([^\s]+)', query)
+            if domain_match:
+                expected_domain = domain_match.group(1).lower()
+                logger.info(f"Domain filtering enabled: {expected_domain}")
+                print(f"{Fore.YELLOW}  Domain filter: {expected_domain}{Style.RESET_ALL}")
         
         with DDGS(timeout=20) as ddgs:
             # Get more results than needed to filter for PDFs
@@ -156,6 +168,7 @@ def search_for_documents(query: str, max_results: int = 10) -> List[FinancialDoc
             results = list(ddgs.text(search_query, max_results=search_limit))
             
             logger.debug(f"Got {len(results)} total results from search")
+            print(f"{Fore.BLUE}  Got {len(results)} total results, filtering for PDFs...{Style.RESET_ALL}")
             
             for result in results:
                 url = result.get('href', '')
@@ -163,6 +176,56 @@ def search_for_documents(query: str, max_results: int = 10) -> List[FinancialDoc
                 
                 # Check if URL contains .pdf (case insensitive)
                 if url and '.pdf' in url.lower():
+                    url_lower = url.lower()
+                    title_lower = title.lower()
+                    
+                    # Domain validation if expected_domain is set
+                    if expected_domain:
+                        # Check if URL contains the expected domain
+                        if expected_domain not in url_lower:
+                            logger.debug(f"Skipping PDF from wrong domain: {url}")
+                            print(f"{Fore.RED}  ✗ Skipped (wrong domain): {title[:50]}...{Style.RESET_ALL}")
+                            continue
+                    
+                    # Filter out academic/research content that is NOT official annual reports
+                    # These are common patterns in academic repositories and research papers
+                    exclude_url_patterns = [
+                        'repository', 'eprint', 'dspace', 'handle.net', '/research/',
+                        'openaccess', 'pure.', '/publications/research', 'working-paper',
+                        'discussion-paper', 'thesis', 'dissertation', '/student',
+                        'faculty', 'journal', 'article', 'conference', 'proceedings',
+                    ]
+                    
+                    exclude_title_patterns = [
+                        'thesis', 'dissertation', 'working paper', 'discussion paper',
+                        'research paper', 'economics', 'economist', 'phd', 'doctoral',
+                        'master', 'undergraduate', 'faculty', 'journal', 'article',
+                        'conference', 'proceedings', 'lecture', 'seminar',
+                    ]
+                    
+                    is_excluded_url = any(pattern in url_lower for pattern in exclude_url_patterns)
+                    is_excluded_title = any(pattern in title_lower for pattern in exclude_title_patterns)
+                    
+                    if is_excluded_url or is_excluded_title:
+                        reason = "academic/research content" if is_excluded_url else "research title"
+                        logger.debug(f"Skipping non-official PDF ({reason}): {url}")
+                        print(f"{Fore.RED}  ✗ Skipped ({reason}): {title[:50]}...{Style.RESET_ALL}")
+                        continue
+                    
+                    # Prefer URLs with official report indicators
+                    official_indicators = [
+                        'annual-report', 'annual_report', 'financial-statement',
+                        'report-and-accounts', 'governance', '/about/', '/corporate/',
+                        '/finance/', 'statutory', 'accounts'
+                    ]
+                    has_official_indicator = any(ind in url_lower for ind in official_indicators)
+                    
+                    # Log whether it looks official
+                    if has_official_indicator:
+                        logger.debug(f"Found official-looking PDF: {title}")
+                    else:
+                        logger.debug(f"Found PDF (no official indicators): {title}")
+                    
                     # Extract university name from query (first few words)
                     uni_name = ' '.join(query.split()[0:3])
                     
@@ -172,12 +235,25 @@ def search_for_documents(query: str, max_results: int = 10) -> List[FinancialDoc
                         source='search'
                     )
                     documents.append(doc)
+                    
+                    # Extract filename from URL
+                    filename = url.split('/')[-1].split('?')[0]
+                    
                     logger.debug(f"Found PDF: {title} - {url}")
+                    print(f"{Fore.GREEN}  Found PDF #{len(documents)}:{Style.RESET_ALL}")
+                    print(f"{Fore.CYAN}    Title: {title}{Style.RESET_ALL}")
+                    print(f"{Fore.YELLOW}    Filename: {filename}{Style.RESET_ALL}")
+                    print(f"{Fore.BLUE}    URL: {url}{Style.RESET_ALL}")
                     
                     if len(documents) >= max_results:
                         break
         
-        logger.info(f"Found {len(documents)} PDF documents for query: {query}")
+        if documents:
+            logger.info(f"Found {len(documents)} PDF documents for query: {query}")
+            print(f"{Fore.GREEN}\u2713 Found {len(documents)} PDF document(s){Style.RESET_ALL}")
+        else:
+            logger.info(f"No PDF documents found for query: {query}")
+            print(f"{Fore.YELLOW}\u2717 No PDF documents found{Style.RESET_ALL}")
         
         # Add delay to respect rate limits
         if documents:
@@ -187,6 +263,7 @@ def search_for_documents(query: str, max_results: int = 10) -> List[FinancialDoc
         
     except Exception as e:
         logger.warning(f"DuckDuckGo search failed for '{query}': {e}")
+        print(f"{Fore.RED}\u2717 Search failed: {str(e)[:100]}{Style.RESET_ALL}")
         return []
 
 
@@ -454,6 +531,9 @@ def download_with_requests(doc: FinancialDocument, output_dir: str, session: req
         safe_filename = doc.get_safe_filename()
         output_path = os.path.join(output_dir, safe_filename)
         
+        # Log what we're saving
+        logger.info(f"{Fore.YELLOW}  → Saving as: {safe_filename}{Style.RESET_ALL}")
+        
         # Download file
         total_size = int(response.headers.get('content-length', 0))
         
@@ -535,7 +615,7 @@ def scrape_financial_page(url: str, domain: str, session: requests.Session) -> L
 
 
 def is_financial_document(url: str, link_text: str = "") -> bool:
-    """Check if a URL appears to be a financial document.
+    """Check if a URL appears to be an official financial document (annual report).
     
     Parameters
     ----------
@@ -547,34 +627,61 @@ def is_financial_document(url: str, link_text: str = "") -> bool:
     Returns
     -------
     bool
-        True if appears to be a financial document
+        True if appears to be an official university annual report
     """
     # File extensions to look for
     doc_extensions = ['.pdf', '.docx', '.doc', '.xlsx', '.xls']
     
     url_lower = url.lower()
     text_lower = link_text.lower()
+    combined_text = f"{url_lower} {text_lower}"
     
     # Check if URL has document extension
     has_extension = any(url_lower.endswith(ext) for ext in doc_extensions)
     
-    # Financial keywords
+    # Strong indicators of official annual reports - require at least one
+    official_indicators = [
+        'annual-report-and-accounts', 'annual_report_and_accounts',
+        'annual-report-accounts', 'annual_report_accounts',
+        'financial-statements', 'financial_statements',
+        'report-and-accounts', 'report_and_accounts',
+        'annual-accounts', 'annual_accounts',
+        '/governance/', '/about/reports/', '/finance/',
+        '/corporate/', '/publications/annual',
+    ]
+    
+    has_official_indicator = any(ind in combined_text for ind in official_indicators)
+    
+    # Weaker financial keywords - only use if combined with other signals
     financial_keywords = [
-        'financial', 'statement', 'account', 'annual', 'report',
-        'fiscal', 'budget', 'audit', 'finance'
+        'annual report', 'financial statement', 'accounts',
+        'statutory accounts', 'consolidated accounts'
     ]
     
-    has_financial_keyword = any(kw in url_lower or kw in text_lower for kw in financial_keywords)
+    has_financial_keyword = any(kw in combined_text for kw in financial_keywords)
     
-    # Exclude common false positives
+    # EXCLUDE patterns - academic/research content that is NOT official reports
     exclude_patterns = [
-        'course', 'degree', 'student', 'module', 'prospectus',
-        'login', 'portal', 'admissions', 'apply', 'news'
+        # Academic repositories and research
+        'repository', 'eprint', 'dspace', 'handle.net', 'research.',
+        '/research/', 'publications/research', 'pure.', 'openaccess',
+        # Student/thesis content
+        'thesis', 'dissertation', 'student', 'coursework', 'assignment',
+        'essay', '/students/', 'module', 'degree',
+        # Economics/academic papers
+        'working-paper', 'working_paper', 'discussion-paper',
+        'economics', 'economist', 'faculty', 'journal', 'article',
+        # Administrative/other
+        'course', 'prospectus', 'login', 'portal', 'admissions',
+        'apply', 'news', 'blog', 'press-release', 'event',
+        # File patterns for non-reports
+        'cv.pdf', 'resume', 'syllabus', 'handbook', 'guide',
     ]
     
-    has_exclude = any(pattern in url_lower for pattern in exclude_patterns)
+    has_exclude = any(pattern in combined_text for pattern in exclude_patterns)
     
-    return has_extension and has_financial_keyword and not has_exclude
+    # Must have extension, must have official indicator OR financial keyword, must not have excludes
+    return has_extension and (has_official_indicator or has_financial_keyword) and not has_exclude
 
 
 def download_with_playwright(doc: FinancialDocument, output_dir: str, headless: bool = True) -> Tuple[bool, str]:
@@ -791,8 +898,12 @@ def process_documents(documents: List[FinancialDocument], output_dir: str,
                 stats['skipped'] += 1
                 continue
             
+            # Extract filename and title info from URL
+            url_filename = doc.url.split('/')[-1].split('?')[0]
+            
             logger.info(f"\n{Fore.CYAN}{'='*80}{Style.RESET_ALL}")
             logger.info(f"{Fore.CYAN}{Style.BRIGHT}Processing: {doc.university}{Style.RESET_ALL}")
+            logger.info(f"{Fore.YELLOW}File from URL: {url_filename}{Style.RESET_ALL}")
             logger.info(f"{Fore.WHITE}URL: {doc.url}{Style.RESET_ALL}")
             
             # Check if it's a page to scrape or a direct document

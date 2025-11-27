@@ -28,6 +28,13 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 try:
+    from tqdm import tqdm
+    TQDM_AVAILABLE = True
+except ImportError:
+    TQDM_AVAILABLE = False
+    tqdm = lambda x, **kwargs: x
+
+try:
     from colorama import Fore, Style, init as colorama_init
     colorama_init(autoreset=True)
     COLORAMA_AVAILABLE = True
@@ -167,6 +174,93 @@ def to_absolute_path(rel_path: str | Path) -> Path:
 
 # Global cache for HESA provider data
 _HESA_PROVIDERS = None
+_UNIVERSITY_DOMAINS = None
+
+def load_university_domains(csv_path: str = "gemini_list.csv") -> Dict[str, List[str]]:
+    """
+    Load university domains from gemini_list.csv.
+    
+    Returns:
+        Dict mapping normalized university names to list of domains
+        e.g., {'university of oxford': ['ox.ac.uk', 'www.ox.ac.uk']}
+    """
+    global _UNIVERSITY_DOMAINS
+    
+    if _UNIVERSITY_DOMAINS is not None:
+        return _UNIVERSITY_DOMAINS
+    
+    csv_file = Path(csv_path)
+    if not csv_file.exists():
+        logging.warning(f"Domain file not found: {csv_path}")
+        _UNIVERSITY_DOMAINS = {}
+        return _UNIVERSITY_DOMAINS
+    
+    domain_map = {}
+    
+    try:
+        with open(csv_file, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                uni_name = row.get('University Name', '').strip()
+                domain = row.get('Root Domain', '').strip()
+                
+                if not uni_name or not domain:
+                    continue
+                
+                # Normalize university name
+                normalized = normalize_name_for_matching(uni_name)
+                
+                # Store both with and without 'www.'
+                domains = [domain]
+                if domain.startswith('www.'):
+                    domains.append(domain[4:])  # Also store without www.
+                else:
+                    domains.append(f'www.{domain}')  # Also store with www.
+                
+                if normalized not in domain_map:
+                    domain_map[normalized] = []
+                domain_map[normalized].extend(domains)
+        
+        logging.info(f"Loaded domains for {len(domain_map)} universities")
+        
+    except Exception as e:
+        logging.error(f"Error loading university domains: {e}")
+        domain_map = {}
+    
+    _UNIVERSITY_DOMAINS = domain_map
+    return _UNIVERSITY_DOMAINS
+
+
+def get_domains_for_university(uni_name: str, ukprn: str = None) -> List[str]:
+    """
+    Get valid domains for a university.
+    
+    Args:
+        uni_name: University name (official or normalized)
+        ukprn: Optional UKPRN to help with matching
+    
+    Returns:
+        List of valid domains (e.g., ['cam.ac.uk', 'www.cam.ac.uk'])
+    """
+    domain_map = load_university_domains()
+    
+    # Try normalized name
+    normalized = normalize_name_for_matching(uni_name)
+    if normalized in domain_map:
+        return domain_map[normalized]
+    
+    # Try matching via UKPRN if available
+    if ukprn:
+        hesa_data = load_hesa_providers()
+        official_name = hesa_data['ukprn_to_name'].get(ukprn, '')
+        if official_name:
+            normalized = normalize_name_for_matching(official_name)
+            if normalized in domain_map:
+                return domain_map[normalized]
+    
+    # No domains found
+    return []
+
 
 def load_hesa_providers(csv_path: str = "ProviderAllHESAEnhanced.csv") -> Dict:
     """
@@ -1134,13 +1228,15 @@ def identify_missing_years(
     return missing_data
 
 
-def generate_search_query(uni_name: str, year: str) -> str:
+def generate_search_query(uni_name: str, year: str, ukprn: str = None, domains: List[str] = None) -> str:
     """
     Generate search query for finding a specific year's financial report.
     
     Args:
-        uni_name: University name
+        uni_name: University name (official name, not UKPRN)
         year: Year string (e.g., "2020-21" or "2020")
+        ukprn: Optional UKPRN to include in search
+        domains: Optional list of valid domains to restrict search
         
     Returns:
         Search query string
@@ -1148,15 +1244,21 @@ def generate_search_query(uni_name: str, year: str) -> str:
     # Clean university name
     clean_name = uni_name.replace('_', ' ')
     
-    # Generate query with various terms
-    terms = [
-        f'"{clean_name}" {year} "annual report"',
-        f'"{clean_name}" {year} "financial statements"',
-        f'"{clean_name}" {year} "accounts"',
-    ]
+    # Use specific terms that appear in official annual reports
+    # "annual report and accounts" OR "financial statements" are official terminology
+    # Exclude research/thesis content by avoiding generic "annual report" alone
+    official_terms = '("annual report and accounts" OR "annual report and financial statements" OR "report and financial statements")'
     
-    # Use the first one as primary
-    return terms[0]
+    # If we have domains, use site: operator for the primary domain
+    if domains and len(domains) > 0:
+        # Use the shortest domain (usually without www.)
+        primary_domain = min(domains, key=len)
+        query = f'site:{primary_domain} "{clean_name}" {year} {official_terms}'
+    else:
+        # Fallback to generic search
+        query = f'"{clean_name}" {year} {official_terms}'
+    
+    return query
 
 
 def run_download_script(
@@ -1179,9 +1281,11 @@ def run_download_script(
             '--output', str(output_dir),
             '--limit', str(limit),
             '--method', method,
-            '--no-scrape'  # Don't scrape, just search
+            '--no-scrape',  # Don't scrape, just search
+            '--verbose'  # Enable verbose output to see search results
         ]
         
+        print(colored_text(f"  🔍 Search query: {search_query}", Fore.CYAN))
         logging.info(f"Running: {' '.join(cmd)}")
         
         result = subprocess.run(
@@ -1191,17 +1295,51 @@ def run_download_script(
             timeout=300  # 5 minute timeout
         )
         
+        # Parse and display search results with details
+        if result.stdout:
+            # Look for search results and downloads in output
+            found_pdfs = result.stdout.count('Found PDF #')
+            downloads = result.stdout.count('Successfully downloaded')
+            
+            if found_pdfs > 0:
+                print(colored_text(f"  ✓ Found {found_pdfs} PDF(s) in search results", Fore.GREEN))
+                
+                # Show details of each PDF found
+                lines = result.stdout.split('\n')
+                for i, line in enumerate(lines):
+                    # Show the title, filename, and URL for each result
+                    if 'Title:' in line:
+                        print(colored_text(f"    {line.strip()}", Fore.CYAN))
+                    elif 'Filename:' in line:
+                        print(colored_text(f"    {line.strip()}", Fore.YELLOW))
+                    elif 'URL:' in line and i > 0 and 'Title:' in lines[i-2]:
+                        # Only show URLs that are part of search results
+                        url = line.strip()
+                        if len(url) > 100:
+                            url = url[:97] + '...'
+                        print(colored_text(f"    {url}", Fore.BLUE))
+                        print()  # Blank line between results
+            else:
+                print(colored_text(f"  ✗ No PDFs found in search results", Fore.YELLOW))
+            
+            if downloads > 0:
+                print(colored_text(f"  ✓ Downloaded {downloads} file(s)", Fore.GREEN))
+        
         if result.returncode == 0:
             logging.info("Download script completed successfully")
             return True
         else:
+            if result.stderr:
+                print(colored_text(f"  ✗ Error: {result.stderr[:200]}", Fore.RED))
             logging.warning(f"Download script failed: {result.stderr}")
             return False
             
     except subprocess.TimeoutExpired:
+        print(colored_text(f"  ✗ Search timed out after 5 minutes", Fore.RED))
         logging.error("Download script timed out")
         return False
     except Exception as e:
+        print(colored_text(f"  ✗ Error: {str(e)[:200]}", Fore.RED))
         logging.error(f"Error running download script: {e}")
         return False
 
@@ -1239,26 +1377,44 @@ def run_extraction_script(
         if fast_mode:
             cmd.append('--fast')
         
+        print(colored_text(f"\n  📄 Extracting text from PDFs (this may take a few minutes)...", Fore.CYAN))
         logging.info(f"Running: {' '.join(cmd)}")
         
-        result = subprocess.run(
+        # Use Popen to show output in real-time while still waiting for completion
+        process = subprocess.Popen(
             cmd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
-            timeout=3600  # 1 hour timeout
+            bufsize=1,  # Line buffered
+            universal_newlines=True
         )
         
-        if result.returncode == 0:
+        # Stream output in real-time
+        if process.stdout:
+            for line in process.stdout:
+                # Show progress lines from extraction script
+                if any(indicator in line for indicator in ['Extracting', 'Processing', 'Completed', 'Error']):
+                    print(f"    {line.strip()}")
+        
+        # Wait for process to complete
+        return_code = process.wait(timeout=3600)  # 1 hour timeout
+        
+        if return_code == 0:
+            print(colored_text(f"  ✓ Extraction completed successfully", Fore.GREEN))
             logging.info("Extraction script completed successfully")
             return True
         else:
-            logging.warning(f"Extraction script failed: {result.stderr}")
+            print(colored_text(f"  ✗ Extraction failed with code {return_code}", Fore.RED))
+            logging.warning(f"Extraction script failed with return code {return_code}")
             return False
             
     except subprocess.TimeoutExpired:
+        print(colored_text(f"  ✗ Extraction timed out after 1 hour", Fore.RED))
         logging.error("Extraction script timed out")
         return False
     except Exception as e:
+        print(colored_text(f"  ✗ Error: {str(e)[:200]}", Fore.RED))
         logging.error(f"Error running extraction script: {e}")
         return False
 
@@ -1679,9 +1835,20 @@ Examples:
     if args.dry_run:
         print(colored_text("\nDry run - showing what would be searched:", Fore.YELLOW))
         search_count = 0
-        for uni_name, years in list(missing_data.items())[:args.unis_per_iteration]:
+        for uni_key, years in list(missing_data.items())[:args.unis_per_iteration]:
+            # Get official name from university_data
+            uni_name = university_data[uni_key]['name'] if uni_key in university_data else uni_key
+            ukprn = university_data[uni_key]['ukprn'] if uni_key in university_data else None
+            
+            # Get valid domains for this university
+            domains = get_domains_for_university(uni_name, ukprn)
+            if domains:
+                print(colored_text(f"\n{uni_name} (domains: {', '.join(domains[:2])})", Fore.CYAN))
+            else:
+                print(colored_text(f"\n{uni_name} (⚠️  no domain filtering)", Fore.YELLOW))
+            
             for year in years[:3]:  # Show first 3 missing years per uni
-                query = generate_search_query(uni_name, year)
+                query = generate_search_query(uni_name, year, ukprn, domains)
                 print(f"  Would search: {query}")
                 search_count += 1
         print(colored_text(f"\nWould perform {search_count} searches", Fore.YELLOW))
@@ -1691,13 +1858,26 @@ Examples:
     logging.info(f"\nStep 3: Preparing searches for {args.unis_per_iteration} universities...")
     all_queries = []
     
-    for uni_name, years in list(missing_data.items())[:args.unis_per_iteration]:
+    for uni_key, years in list(missing_data.items())[:args.unis_per_iteration]:
+        # Get official name and UKPRN from university_data
+        uni_name = university_data[uni_key]['name'] if uni_key in university_data else uni_key
+        ukprn = university_data[uni_key]['ukprn'] if uni_key in university_data else None
+        
+        # Get valid domains for this university
+        domains = get_domains_for_university(uni_name, ukprn)
+        
         logging.info(colored_text(f"\nQueuing searches for: {uni_name}", Fore.CYAN))
+        if ukprn:
+            logging.info(f"UKPRN: {ukprn}")
+        if domains:
+            logging.info(f"Domains: {', '.join(domains[:3])}")
+        else:
+            logging.warning(f"⚠️  No domain filtering available for {uni_name}")
         logging.info(f"Missing years: {', '.join(years[:5])}{'...' if len(years) > 5 else ''}")
         
         # Queue searches for earliest missing years
         for year in years[:3]:  # Try first 3 missing years
-            query = generate_search_query(uni_name, year)
+            query = generate_search_query(uni_name, year, ukprn, domains)
             all_queries.append((uni_name, year, query))
     
     logging.info(f"\nQueued {len(all_queries)} searches")
@@ -1709,13 +1889,28 @@ Examples:
     print(colored_text(f"{'='*80}\n", Fore.CYAN))
     
     successful_downloads = 0
-    for idx, (uni_name, year, query) in enumerate(all_queries, 1):
-        print(colored_text(f"\n[{idx}/{len(all_queries)}] {uni_name} - {year}", Fore.CYAN))
+    
+    # Create progress bar for downloads
+    if TQDM_AVAILABLE:
+        query_iterator = tqdm(all_queries, desc="Searching & Downloading", unit="query")
+    else:
+        query_iterator = all_queries
+    
+    for idx, (uni_name, year, query) in enumerate(query_iterator, 1):
+        if not TQDM_AVAILABLE:
+            print(colored_text(f"\n[{idx}/{len(all_queries)}] {uni_name} - {year}", Fore.CYAN))
+        else:
+            # Update tqdm description with current university
+            query_iterator.set_description(f"[{idx}/{len(all_queries)}] {uni_name} - {year}")
+            print()  # Newline for cleaner output
+            print(colored_text(f"[{idx}/{len(all_queries)}] {uni_name} - {year}", Fore.CYAN))
+        
         logging.info(f"Searching: {query}")
         
         if run_download_script(query, args.downloads, limit=5):
             successful_downloads += 1
     
+    print(colored_text(f"\n✓ Completed {successful_downloads}/{len(all_queries)} successful searches", Fore.GREEN))
     logging.info(f"\nDownloaded from {successful_downloads}/{len(all_queries)} searches")
     
     # Update CSV with downloaded PDFs
